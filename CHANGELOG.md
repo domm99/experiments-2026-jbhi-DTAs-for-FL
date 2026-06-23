@@ -1,3 +1,20 @@
+## [1.4.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.3.0...1.4.0) (2026-06-23)
+
+### Features
+
+* implement model sharing from FL server to DTAs to HDTs ([d5902a6](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/d5902a67221951e08c8015eb293f8e3389c9cf17))
+
+### Bug Fixes
+
+* adapt train method for FL execution ([dcb2762](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/dcb27621c8035605f7a4f8e1a5034e8bb35d9c55))
+* add check on at least one DT active when training ([012482a](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/012482a907f0ecd50c099ee1cfbe9a91fd5a9727))
+* update dts data ([db5fa11](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/db5fa114a6a92c4ad38ab83262f4459bb21477e9))
+
+### General maintenance
+
+* add debug print ([cead144](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/cead1441451fd1f6ec921b97795a8d38ce1d0a5e))
+* **release:** update .env versions to 1.3.0 [skip ci] ([b6db32d](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/b6db32d5335a65460ab943b1d6f140f8df822d33))
+
 ## [1.3.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.2.0...1.3.0) (2026-06-23)
 
 ### Features
