@@ -9,6 +9,13 @@ packages = [{ include = "src" }]
 
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"
+pandas = "^3.0.3"
+torch = "^2.12.1"
+matplotlib = "^3.11.0"
+seaborn = "^0.13.2"
+river = "^0.25.0"
+scipy = "^1.18.0"
+numpy = "^2.5.0"
 
 
 [build-system]
