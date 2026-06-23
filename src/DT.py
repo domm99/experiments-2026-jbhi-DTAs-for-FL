@@ -1,0 +1,188 @@
+import glob
+import torch
+import pandas as pd
+from collections import OrderedDict
+from src.distributed.LearningConfig import LearningConfig
+from src.distributed.utils import (
+    load_patient_series,
+    load_test_patient_series,
+    PatientSeries,
+    GlucoseClassifierLSTM,
+    evaluate,
+    create_test_loaders,
+    normalize_series,
+)
+
+class DT:
+
+    def __init__(self, mid: str, data_path: str, experiment: str, config: LearningConfig, seed: int):
+        self._mid = mid
+        self._time = None
+        self._seed = seed
+        self._model = None
+        self._last_std = 0.0
+        self._last_mean = 0.0
+        self._config = config
+        self._is_active = False
+        self._dt_aggregate = None
+        self._experiment = experiment
+        self._data = self.__upload_data(data_path, mid)
+
+    def activate(self, current_time: pd.Timestamp):
+        self._is_active = True
+        self._time = current_time
+
+    def deactivate(self):
+        self._is_active = False
+
+    @property
+    def model(self):
+        return self._model
+
+    @model.setter
+    def model(self, data: tuple[OrderedDict[str, torch.Tensor], float, float]):
+        model, mean, std = data
+        fresh_model = GlucoseClassifierLSTM(
+            hidden_size=self._config.hidden_size,
+            num_layers=self._config.layers,
+            dropout=self._config.dropout,
+        ).to(self._config.device)
+        fresh_model.load_state_dict(model)
+        self._model = fresh_model
+        self._last_mean = mean
+        self._last_std = std
+
+    @property
+    def dt_aggregate(self):
+        return self._dt_aggregate
+
+    @dt_aggregate.setter
+    def dt_aggregate(self, dt):
+        self._dt_aggregate = dt
+
+    def __filter_data_by_time(self, current_time: pd.Timestamp, last_train_time: pd.Timestamp = None) -> pd.DataFrame:
+        if last_train_time is None:
+            return self._data[self._data['timestamp'] <= current_time]
+        return self._data[
+            (self._data['timestamp'] >= last_train_time) &
+            (self._data['timestamp'] <= current_time)
+        ]
+
+    def __get_patient_series(self, current_time: pd.Timestamp, last_train_time: pd.Timestamp = None) -> PatientSeries:
+        filtered_df = self.__filter_data_by_time(current_time, last_train_time)
+        series = load_patient_series(
+            patient_id=self._mid,
+            patient_dataframe=filtered_df,
+            sequence_length=self._config.sequence_length,
+            train_ratio=self._config.train_ratio,
+            label_column=self._config.label_column,
+        )
+        return series
+
+    def get_data(self, current_time: pd.Timestamp) -> PatientSeries:
+        my_series = self.__get_patient_series(current_time)
+        return my_series
+
+    def inference(
+        self,
+        current_time: pd.Timestamp,
+        last_training_time: pd.Timestamp,
+        window_start_time: pd.Timestamp | None = None,
+    ) -> dict:
+        if self._model is None:
+            metrics = {
+                'status': 'skipped_no_model',
+                'num_points': 0,
+                'prediction_count': 0,
+                'prediction_correct_count': 0,
+                'prediction_error_count': 0,
+                'loss': float('nan'),
+                'accuracy': float('nan'),
+                'precision': float('nan'),
+                'recall': float('nan'),
+                'f1_score': float('nan'),
+            }
+            self.__export_test_metrics(metrics, current_time)
+            return metrics
+        loader, num_points = self.__test_loader_from_data(
+            current_time,
+            last_training_time,
+            window_start_time=window_start_time,
+        )
+        if loader is None:
+            metrics = {
+                'status': 'skipped_short_test_window',
+                'num_points': num_points,
+                'prediction_count': 0,
+                'prediction_correct_count': 0,
+                'prediction_error_count': 0,
+                'loss': float('nan'),
+                'accuracy': float('nan'),
+                'precision': float('nan'),
+                'recall': float('nan'),
+                'f1_score': float('nan'),
+            }
+            self.__export_test_metrics(metrics, current_time)
+            return metrics
+        metrics = evaluate(self._model, loader, self._config.device)
+        metrics['status'] = 'evaluated'
+        metrics['num_points'] = num_points
+        self.__export_test_metrics(metrics, current_time)
+        return metrics
+
+    def __upload_data(self, data_path: str, mid: str) -> pd.DataFrame:
+        data = pd.read_csv(f'{data_path}/{mid}.csv')
+        data['timestamp'] = pd.to_datetime(
+            data['Measurement_date'] + ' ' + data['Measurement_time']
+        )
+        return data
+
+    def __test_loader_from_data(
+        self,
+        current_time: pd.Timestamp,
+        last_training_time: pd.Timestamp,
+        window_start_time: pd.Timestamp | None = None,
+    ):
+        if window_start_time is None:
+            filtered_df = self.__filter_data_by_time(current_time, last_training_time)
+            num_points = len(filtered_df)
+        else:
+            filtered_df = self.__filter_data_by_time(current_time)
+            window_df = filtered_df[
+                (filtered_df['timestamp'] > window_start_time) &
+                (filtered_df['timestamp'] <= current_time)
+            ]
+            num_points = len(window_df)
+
+        series = load_test_patient_series(
+            patient_id=self._mid,
+            patient_dataframe=filtered_df,
+            sequence_length=self._config.sequence_length,
+            label_column=self._config.label_column,
+        )
+        if series is None:
+            return None, num_points
+        normalized_series = normalize_series(series, self._last_mean, self._last_std)
+        loader = create_test_loaders(
+            normalized_series,
+            self._config.sequence_length,
+            self._config.stride,
+            self._config.batch_size,
+            target_start_time=window_start_time,
+            target_start_inclusive=False,
+            target_end_time=current_time,
+        )
+        if len(loader.dataset) == 0:
+            return None, num_points
+        return loader, num_points
+
+    def __export_test_metrics(self, metrics: dict, current_time: pd.Timestamp):
+        metrics['dt_id'] = self._mid
+        output_path = f'{self._config.data_export_path}/{self._experiment}/test_{current_time}-seed_{self._seed}.csv'
+        files = glob.glob(output_path)
+        if len(files) == 0:
+            metrics_df = pd.DataFrame([metrics])
+        else:
+            metrics_df = pd.read_csv(output_path)
+            metrics_df = pd.concat([metrics_df, pd.DataFrame([metrics])], ignore_index=True)
+        metrics_df.to_csv(output_path, index=False)
