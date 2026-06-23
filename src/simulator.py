@@ -5,6 +5,8 @@ from DT import DT
 from dataclasses import dataclass, field
 from DTAggregate import DTAggregate
 from LearningConfig import LearningConfig
+from FLServer import FLServer
+
 
 @dataclass(order=True)
 class Event:
@@ -51,7 +53,7 @@ class Monitor(ABC):
 
 class Simulator:
 
-    def __init__(self, data_folder: str, experiment: str, starting_time: pd.Timestamp, ending_time: pd.Timestamp, config: LearningConfig, seed: int):
+    def __init__(self, data_folder: str, experiment: str, starting_time: pd.Timestamp, ending_time: pd.Timestamp, config: LearningConfig, seed: int, mapping_dtas_dts: map[str, list[str]]):
         self._queue = EventQueue()
         self.data_folder = data_folder
         self.seed = seed
@@ -65,7 +67,9 @@ class Simulator:
             'TRAIN': self.__handle_train,
             'INFERENCE': self.__handle_inference,
         }
-        self._dt_aggregate = DTAggregate(config, experiment, seed)
+        self._dtas = { f'Hospital-{i}' : DTAggregate(config, experiment, seed) for i in  config.number_of_hospitals }
+        self._mapping_dtas_dts = mapping_dtas_dts
+        self._fl_server = FLServer(config)
         self._monitors = []
         self._experiment = experiment
 
@@ -81,10 +85,6 @@ class Simulator:
     @property
     def state(self) -> SimulationState:
         return self._state
-
-    @property
-    def dt_aggregate(self) -> DTAggregate:
-        return self._dt_aggregate
 
     @property
     def config(self) -> LearningConfig:
@@ -132,9 +132,17 @@ class Simulator:
         local_dt = self._state.local_dts[patient_id]
         local_dt.activate(current_time)
         self._state.active_patients.add(patient_id)
-        self._dt_aggregate.register_active_dt(local_dt, patient_id)
-        mean, std = self._dt_aggregate.statistics
-        local_dt.model = (self._dt_aggregate.model, mean, std)
+        dta_id = self.__lookup_dta_from_patient_id(event.payload['patient_id'])
+        dta = self._dtas[dta_id]
+        dta.register_active_dt(local_dt, patient_id)
+        mean, std = dta.statistics
+        local_dt.model = (dta.model, mean, std)
+
+    def __lookup_dta_from_patient_id(self, patient_id):
+        for dta_id, dts in self._mapping_dtas_dts.items():
+            if patient_id in dts:
+                return dta_id
+        raise Exception('No corresponding DTA found')
 
     def __handle_patient_becomes_inactive(self, event: Event):
         patient_id = event.payload['patient_id']
@@ -144,18 +152,43 @@ class Simulator:
         dt = self._state.local_dts[patient_id]
         if dt is not None:
             dt.deactivate()
-            self._dt_aggregate.unregister_active_dt(patient_id)
+            dta_id = self.__lookup_dta_from_patient_id(event.payload['patient_id'])
+            dta = self._dtas[dta_id]
+            dta.unregister_active_dt(patient_id)
             self._state.active_patients.remove(patient_id)
+
+    # def __handle_train(self, event: Event):
+    #     current_time = event.time
+    #     print(f'========= Training at:{current_time} =========')
+    #     self._dt_aggregate.update_data_from_dts(current_time)
+    #     if self._dt_aggregate.trainable_dt_count == 0:
+    #         print('========= Training skipped: no trainable active DTs =========')
+    #         return
+    #     self._dt_aggregate.train(current_time)
+    #     self._dt_aggregate.notify_new_model()
+    #     self._state.last_training_time = current_time
+    #     self._state.last_inference_results = []
 
     def __handle_train(self, event: Event):
         current_time = event.time
         print(f'========= Training at:{current_time} =========')
-        self._dt_aggregate.update_data_from_dts(current_time)
-        if self._dt_aggregate.trainable_dt_count == 0:
-            print('========= Training skipped: no trainable active DTs =========')
-            return
-        self._dt_aggregate.train(current_time)
-        self._dt_aggregate.notify_new_model()
+
+        for _ in range(self._config.fl_global_rounds):
+            ## 1. Local training
+            for dta in self._dtas.values():
+                dta.train(current_time)
+
+            ## 2. Get local models from DTAs
+            models = [dta.model() for dta in self._dtas.values()]
+
+            ## 3. Global aggregation
+            self._fl_server.receive_client_update(models)
+            self._fl_server.aggregate()
+
+        ## 4. Notification of new model to HDTs
+        for dta in self._dtas.values():
+            dta.notify_new_model()
+
         self._state.last_training_time = current_time
         self._state.last_inference_results = []
 
@@ -171,7 +204,9 @@ class Simulator:
             return
         inference_results = []
         window_start_time = event.payload.get('window_start_time')
-        for local_dt in self._dt_aggregate.active_dts:
+        active_dts_from_dtas = [dta.active_dt for dta in self._dtas.values()]
+        dts = [dt for active_dts in active_dts_from_dtas for dt in active_dts]
+        for local_dt in dts:
             metrics = local_dt.inference(
                 current_time,
                 last_training_time,
