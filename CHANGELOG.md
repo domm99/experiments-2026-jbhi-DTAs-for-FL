@@ -1,3 +1,21 @@
+## [1.2.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.1.0...1.2.0) (2026-06-23)
+
+### Features
+
+* add inference monitor ([4996be0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/4996be05db726f8c63d58539acbcdf0f2e386dca))
+* implement FL server with FedAvg ([cc69aeb](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/cc69aeb8ff137004db430387c9cc68bb38dbd964))
+
+### Bug Fixes
+
+* add PeriodicInferenceMonitor import ([d0025ed](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/d0025ed47da164a3a24a985d12846888be5038c0))
+* fix imports ([6c1f8ef](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/6c1f8ef3e404865a4ce399c58e85faca9e5c2488))
+* fix imports ([4ed6357](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/4ed635772f458cb2e7f00c8e727c203ffa5fee71))
+* remove codecarbon import ([6557d3b](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/6557d3b147d901aa68dc37d7b7bfbc0a96aa4b4b))
+
+### General maintenance
+
+* **release:** update .env versions to 1.1.0 [skip ci] ([ee3ea22](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/ee3ea22f7a9c9d28ce24d3067d7168f67ba5f35f))
+
 ## [1.1.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.0.0...1.1.0) (2026-06-23)
 
 ### Features
