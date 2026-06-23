@@ -43,3 +43,8 @@ class LearningConfig:
     adwin_min_evaluated_dts: int = 5
     data_export_path: str = 'data'
     device: torch.device = get_current_device()
+
+    ## FL
+    fl_global_rounds: int = 5
+    fl_local_epochs: int = 2
+    number_of_hospitals = 10
