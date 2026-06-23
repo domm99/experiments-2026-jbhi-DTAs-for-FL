@@ -1,3 +1,13 @@
+## [1.4.1](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.4.0...1.4.1) (2026-06-23)
+
+### Bug Fixes
+
+* fix state_dict handling ([bd6f75c](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/bd6f75cec4e60d825b558b84d95921612038daf0))
+
+### General maintenance
+
+* **release:** update .env versions to 1.4.0 [skip ci] ([338e63b](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/338e63b53f3fd579b3bcb77906b43e00e6e8ff37))
+
 ## [1.4.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.3.0...1.4.0) (2026-06-23)
 
 ### Features
