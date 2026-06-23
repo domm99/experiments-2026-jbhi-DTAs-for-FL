@@ -1,4 +1,5 @@
 import glob
+import random
 import pandas as pd
 from pathlib import Path
 from utils import seed_everything
@@ -6,6 +7,25 @@ from simulator import Simulator, Event
 from LearningConfig import LearningConfig
 from Monitors import PeriodicInferenceMonitor
 
+def balanced_split(xs, n):
+    if n <= 0:
+        raise ValueError("n must be greater than xs length")
+
+    k, r = divmod(len(xs), n)
+
+    return [
+        xs[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)]
+        for i in range(n)
+    ]
+
+def split_patients(all_patients, config) -> map[str, list[str]]:
+    ids = [p['patient_id'] for p in all_patients]
+    random.shuffle(ids)
+    split = balanced_split(ids, config.number_of_hospitals)
+    return {
+        f'Hospital-{h}': patients
+        for h, patients in enumerate(split)
+    }
 
 def schedule_trainings(experiment: str, simulator: Simulator, min_time: pd.Timestamp, max_time: pd.Timestamp) -> None:
     if experiment == 'RetrainAfterTime':
@@ -52,14 +72,16 @@ def load_patients(data_folder: str) -> tuple[list[dict], pd.Timestamp, pd.Timest
     return patients, global_min, global_max
 
 
-def run_simulation(seed: int, experiment: str) -> None:
+def run_simulation(seed: int, experiment: str, config) -> None:
     seed_everything(seed)
     all_patients, min_time, max_time = load_patients(data_folder)
 
     print(f'Found {len(all_patients)} patients')
     print(f'Min: {min_time}, Max: {max_time}')
 
-    simulator = Simulator(data_folder, experiment, min_time, max_time, config, seed)
+    mapping_dtas_dts = split_patients(all_patients, config)
+
+    simulator = Simulator(data_folder, experiment, min_time, max_time, config, seed, mapping_dtas_dts)
 
     # Schedule patients activation and deactivation
     for patient in all_patients:
@@ -91,11 +113,11 @@ if __name__ == '__main__':
     data_folder = 'T1DiabetesGranada/split-labeled'
     seeds = [0]
     experiments = ['RetrainAfterTime']
-   
-    experiment = 'RetrainAfterPerformanceDrift'
+
     for experiment in experiments:
         print(f'Running experiment {experiment}')
         exp_folder = f'{experiment}'
         Path(f'{config.data_export_path}/{exp_folder}').mkdir(parents=True, exist_ok=True)
         for seed in seeds:
-            run_simulation(seed, exp_folder)
+            seed_everything(seed)
+            run_simulation(seed, exp_folder, config)
