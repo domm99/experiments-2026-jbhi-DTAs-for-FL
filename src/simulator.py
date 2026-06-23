@@ -173,6 +173,9 @@ class Simulator:
         current_time = event.time
         print(f'========= Training at:{current_time} =========')
 
+        for dta in self._dtas.values():
+            dta.update_data_from_dts(current_time)
+        
         for _ in range(self._config.fl_global_rounds):
             ## 1. Local training
             for dta in self._dtas.values():
