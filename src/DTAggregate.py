@@ -18,7 +18,8 @@ from src.distributed.utils import (
 
 class DTAggregate:
 
-    def __init__(self, config: LearningConfig, experiment: str, initial_model, seed: int):
+    def __init__(self, mid, config: LearningConfig, experiment: str, initial_model, seed: int):
+        self._mid = mid
         self._model = initial_model
         self._device = config.device
         self._config = config
@@ -59,6 +60,10 @@ class DTAggregate:
     def model(self) -> dict[str, torch.Tensor]:
         return self._model.state_dict()
 
+    @property
+    def dta_id(self) -> str:
+        return self._mid
+
     @model.setter
     def model(self, value):
         fresh = GlucoseClassifierLSTM(
@@ -77,19 +82,14 @@ class DTAggregate:
         for dt in self._active_dts.values():
             dt.model = (self._model.state_dict(), self._last_mean, self._last_std)
 
-    def train(self, current_time: pd.Timestamp) -> None:
-        self._model = GlucoseClassifierLSTM(
-            hidden_size = self._config.hidden_size,
-            num_layers = self._config.layers,
-            dropout = self._config.dropout,
-        ).to(self._config.device)
+    def train(self, current_time: pd.Timestamp, global_round: int) -> None:
         optimizer = torch.optim.Adam(self._model.parameters(), lr=self._config.learning_rate)
         history: list[dict[str, float]] = []
         patients_series_raw = [series for series in self._dts_data.values() if series is not None]
         if not patients_series_raw:
             print('Skipping training: no DT has enough history for training windows yet')
             return False
-        mean, std = compute_train_stats(patients_series_raw)
+        mean, std = compute_train_stats(patients_series_raw) ## TODO (check) -- this is now done locally to each DTA, should they be agreed globally?
         normalized_series = normalize_series(patients_series_raw, mean, std)
         train_loader, val_loader = create_train_val_loaders(
             patient_series = normalized_series,
@@ -117,7 +117,7 @@ class DTAggregate:
             )
         )
 
-        for epoch in range(1, self._config.epochs + 1):
+        for epoch in range(1, self._config.fl_local_epochs + 1):
             self._model.train()
             train_loss_sum = 0.0
             train_loss_normalization = 0.0
@@ -168,6 +168,6 @@ class DTAggregate:
             )
 
         metrics_df = pd.DataFrame(history)
-        metrics_df.to_csv(f'{self._config.data_export_path}/{self._experiment}/training_{current_time}-seed_{self._seed}.csv', index=False)
+        metrics_df.to_csv(f'{self._config.data_export_path}/{self._experiment}/training_{current_time}-hospital_{self._mid}-GR_{global_round}-seed_{self._seed}.csv', index=False)
         self._last_mean = mean
         self._last_std = std
