@@ -4,6 +4,7 @@ from pathlib import Path
 from utils import seed_everything
 from simulator import Simulator, Event
 from LearningConfig import LearningConfig
+from Monitors import PeriodicInferenceMonitor
 
 
 def schedule_trainings(experiment: str, simulator: Simulator, min_time: pd.Timestamp, max_time: pd.Timestamp) -> None:
