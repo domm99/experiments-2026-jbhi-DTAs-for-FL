@@ -1,10 +1,10 @@
 var prepareCmd = `
 echo VERSION="\${nextRelease.version}" > .env
-echo PROJECT_NAME= 'Experiments on Neighbor-based Transfer Learning in MARL' >> .env
-docker build -t davidedomini99/experiments-2025-tcd-marl-neighbor-tl:\${nextRelease.version} .
+echo PROJECT_NAME= 'Experiments for JBHI journal -- DTAs for FL in Smart Healthcare' >> .env
+docker build -t davidedomini99/experiments-2026-jbhi-dtas-for-fl:\${nextRelease.version} .
 `
 var publishCmd = `
-docker push davidedomini99/experiments-2025-tcd-marl-neighbor-tl:\${nextRelease.version}
+docker push davidedomini99/experiments-2026-jbhi-dtas-for-fl:\${nextRelease.version}
 git add .env
 git commit -m "chore(release): update .env versions to \${nextRelease.version} [skip ci]"
 git push
