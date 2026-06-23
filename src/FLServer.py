@@ -2,7 +2,7 @@ from LearningConfig import LearningConfig
 
 class FLServer:
 
-    def __init__(self, config: LearningConfig,):
+    def __init__(self, config: LearningConfig):
         self._config = config
         self.clients_models = []
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
