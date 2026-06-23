@@ -25,3 +25,7 @@ gifs/
 data**/
 charts**/
 policy**/
+
+# dataset
+
+T1DiabetesGranada/
