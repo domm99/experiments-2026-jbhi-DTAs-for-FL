@@ -1,3 +1,18 @@
+## [1.1.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.0.0...1.1.0) (2026-06-23)
+
+### Features
+
+* add DTA ([92cd1f8](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/92cd1f8f0add36403c6c702ed5a4952a5a2148d5))
+* add HDT ([4c9f14a](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/4c9f14a0ef1d91122ca1959d4d8993a338bc81de))
+
+### Bug Fixes
+
+* fix project name in release config ([e513cf3](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/e513cf3c0992a2f027fd0644a3ad2313e8eebe53))
+
+### General maintenance
+
+* **release:** update .env versions to 1.0.0 [skip ci] ([e26213d](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/e26213dcfc0edfd8a464744f3d930f2afe8a5eff))
+
 ## 1.0.0 (2026-06-23)
 
 ### Features
