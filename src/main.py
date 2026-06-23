@@ -1,9 +1,9 @@
 import glob
 import pandas as pd
 from pathlib import Path
-from src.distributed.utils import seed_everything
-from src.distributed.Simulator import Simulator, Event
-from src.distributed.LearningConfig import LearningConfig
+from utils import seed_everything
+from simulator import Simulator, Event
+from LearningConfig import LearningConfig
 
 
 def schedule_trainings(experiment: str, simulator: Simulator, min_time: pd.Timestamp, max_time: pd.Timestamp) -> None:

@@ -1,10 +1,10 @@
 import heapq
 from abc import ABC
 import pandas as pd
-from src.distributed.DT import DT
+from DT import DT
 from dataclasses import dataclass, field
-from src.distributed.DTAggregate import DTAggregate
-from src.distributed.LearningConfig import LearningConfig
+from DTAggregate import DTAggregate
+from LearningConfig import LearningConfig
 
 @dataclass(order=True)
 class Event:

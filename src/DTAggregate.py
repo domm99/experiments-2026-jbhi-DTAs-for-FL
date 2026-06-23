@@ -1,9 +1,9 @@
 import torch
 import pandas as pd
 from torch import nn
-from src.distributed.DT import DT
-from src.distributed.LearningConfig import LearningConfig
-from src.distributed.utils import (
+from DT import DT
+from LearningConfig import LearningConfig
+from utils import (
     CLASS_NAMES,
     GlucoseClassifierLSTM,
     classification_metrics_from_confusion_matrix,

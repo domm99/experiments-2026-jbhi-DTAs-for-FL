@@ -2,8 +2,8 @@ import glob
 import torch
 import pandas as pd
 from collections import OrderedDict
-from src.distributed.LearningConfig import LearningConfig
-from src.distributed.utils import (
+from LearningConfig import LearningConfig
+from utils import (
     load_patient_series,
     load_test_patient_series,
     PatientSeries,
