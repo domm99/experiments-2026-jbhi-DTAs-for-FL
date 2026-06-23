@@ -1,6 +1,6 @@
 import pandas as pd
 from pathlib import Path
-from src.distributed.Simulator import Event, Monitor, Simulator
+from simulator import Event, Monitor, Simulator
 
 class PeriodicInferenceMonitor(Monitor):
 
