@@ -1,3 +1,23 @@
+## [1.3.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.2.0...1.3.0) (2026-06-23)
+
+### Features
+
+* add fl hyperparams ([9dbac8d](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/9dbac8d3b5ccd1ec24ed2161c2a45e95af885523))
+* implement FL logic in simulator ([6b27174](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/6b2717434faa348548d70089c86a89a39a4187da))
+* implement random split of patients among hospitals ([283a5b7](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/283a5b70c7135332fa15e7404d628b4292d98d83))
+
+### Bug Fixes
+
+* fix imports ([0c712b0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/0c712b076eb0a9c1b3493df39f9fb711fa667e74))
+
+### General maintenance
+
+* **release:** update .env versions to 1.2.0 [skip ci] ([3f2d4c1](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/3f2d4c1b2796a97c758860ed9f4f75dac22b9c79))
+
+### Style improvements
+
+* remove trailing comma ([163f1d7](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/163f1d7fdca72b8d0e6877bc32e8fc9621e9014e))
+
 ## [1.2.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.1.0...1.2.0) (2026-06-23)
 
 ### Features
