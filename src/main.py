@@ -81,6 +81,10 @@ def run_simulation(seed: int, experiment: str, config) -> None:
 
     mapping_dtas_dts = split_patients(all_patients, config)
 
+    print('================================ Mapping hospitals-patients ================================')
+    for h_id, patients in mapping_dtas_dts.items():
+        print(f'Hospital ID: {h_id} has {len(patients)} patients')
+
     simulator = Simulator(data_folder, experiment, min_time, max_time, config, seed, mapping_dtas_dts)
 
     # Schedule patients activation and deactivation
@@ -119,5 +123,4 @@ if __name__ == '__main__':
         exp_folder = f'{experiment}'
         Path(f'{config.data_export_path}/{exp_folder}').mkdir(parents=True, exist_ok=True)
         for seed in seeds:
-            seed_everything(seed)
             run_simulation(seed, exp_folder, config)
