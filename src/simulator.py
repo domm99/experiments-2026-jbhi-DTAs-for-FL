@@ -53,7 +53,7 @@ class Monitor(ABC):
 
 class Simulator:
 
-    def __init__(self, data_folder: str, experiment: str, starting_time: pd.Timestamp, ending_time: pd.Timestamp, config: LearningConfig, seed: int, mapping_dtas_dts: map[str, list[str]]):
+    def __init__(self, data_folder: str, experiment: str, starting_time: pd.Timestamp, ending_time: pd.Timestamp, config: LearningConfig, seed: int, mapping_dtas_dts: dict[str, list[str]]):
         self._queue = EventQueue()
         self.data_folder = data_folder
         self.seed = seed
@@ -70,8 +70,8 @@ class Simulator:
         self._fl_server = FLServer(config)
         initial_model = self._fl_server.model
         self._dtas = {
-            f'Hospital-{i}' : DTAggregate(f'Hospital-{i}', config, experiment, initial_model, seed)
-            for i in  config.number_of_hospitals
+            h_id : DTAggregate(h_id, config, experiment, initial_model, seed)
+            for h_id in mapping_dtas_dts.keys()
         }
         self._mapping_dtas_dts = mapping_dtas_dts
         self._monitors = []
@@ -169,6 +169,7 @@ class Simulator:
             dta.update_data_from_dts(current_time)
 
         for gr in range(self._config.fl_global_rounds):
+            print(f'Global round:{gr}')
             ## 1. Local training
             for dta in self._dtas.values():
                 if dta.trainable_dt_count == 0:
@@ -177,7 +178,7 @@ class Simulator:
                 dta.train(current_time, gr)
 
             ## 2. Get local models from DTAs
-            models = [dta.model() for dta in self._dtas.values()]
+            models = [dta.model for dta in self._dtas.values()]
 
             ## 3. Global aggregation
             self._fl_server.receive_client_update(models)
@@ -206,7 +207,7 @@ class Simulator:
             return
         inference_results = []
         window_start_time = event.payload.get('window_start_time')
-        active_dts_from_dtas = [dta.active_dt for dta in self._dtas.values()]
+        active_dts_from_dtas = [dta.active_dts for dta in self._dtas.values()]
         dts = [dt for active_dts in active_dts_from_dtas for dt in active_dts]
         for local_dt in dts:
             metrics = local_dt.inference(

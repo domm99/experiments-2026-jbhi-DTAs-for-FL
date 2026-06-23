@@ -1,4 +1,5 @@
 import glob
+import torch
 import random
 import pandas as pd
 from pathlib import Path
@@ -18,7 +19,7 @@ def balanced_split(xs, n):
         for i in range(n)
     ]
 
-def split_patients(all_patients, config) -> map[str, list[str]]:
+def split_patients(all_patients, config) -> dict[str, list[str]]:
     ids = [p['patient_id'] for p in all_patients]
     random.shuffle(ids)
     split = balanced_split(ids, config.number_of_hospitals)

@@ -1,9 +1,9 @@
 import torch
 import pandas as pd
 from torch import nn
-from src.distributed.DT import DT
-from src.distributed.LearningConfig import LearningConfig
-from src.distributed.utils import (
+from DT import DT
+from LearningConfig import LearningConfig
+from utils import (
     CLASS_NAMES,
     GlucoseClassifierLSTM,
     classification_metrics_from_confusion_matrix,
@@ -58,7 +58,7 @@ class DTAggregate:
 
     @property
     def model(self) -> dict[str, torch.Tensor]:
-        return self._model.state_dict()
+        return self._model
 
     @property
     def dta_id(self) -> str:
@@ -67,12 +67,12 @@ class DTAggregate:
     @model.setter
     def model(self, value):
         fresh = GlucoseClassifierLSTM(
-            hidden_size=config.hidden_size,
-            num_layers=config.layers,
-            dropout=config.dropout,
+            hidden_size=self._config.hidden_size,
+            num_layers=self._config.layers,
+            dropout=self._config.dropout,
         )
         fresh.load_state_dict(value)
-        self._model = fresh
+        self._model = fresh.state_dict()
 
     @property
     def statistics(self) -> tuple[float, float]:
@@ -80,10 +80,16 @@ class DTAggregate:
 
     def notify_new_model(self):
         for dt in self._active_dts.values():
-            dt.model = (self._model.state_dict(), self._last_mean, self._last_std)
+            dt.model = (self._model, self._last_mean, self._last_std)
 
     def train(self, current_time: pd.Timestamp, global_round: int) -> None:
-        optimizer = torch.optim.Adam(self._model.parameters(), lr=self._config.learning_rate)
+        model = GlucoseClassifierLSTM(
+            hidden_size=self._config.hidden_size,
+            num_layers=self._config.layers,
+            dropout=self._config.dropout,
+        ).to(self._config.device)
+        model.load_state_dict(self._model)
+        optimizer = torch.optim.Adam(model.parameters(), lr=self._config.learning_rate)
         history: list[dict[str, float]] = []
         patients_series_raw = [series for series in self._dts_data.values() if series is not None]
         if not patients_series_raw:
@@ -118,7 +124,7 @@ class DTAggregate:
         )
 
         for epoch in range(1, self._config.fl_local_epochs + 1):
-            self._model.train()
+            model.train()
             train_loss_sum = 0.0
             train_loss_normalization = 0.0
             train_confusion_matrix = torch.zeros((len(CLASS_NAMES), len(CLASS_NAMES)), dtype=torch.long)
@@ -127,7 +133,7 @@ class DTAggregate:
                 y = y.to(self._device)
 
                 optimizer.zero_grad()
-                logits = self._model(x)
+                logits = model(x)
                 loss, loss_sum, loss_normalization = cross_entropy_batch(logits, y, loss_weights)
                 loss.backward()
                 optimizer.step()
@@ -137,7 +143,7 @@ class DTAggregate:
                 predictions = logits.argmax(dim=1)
                 update_confusion_matrix(train_confusion_matrix, y, predictions)
 
-            val_metrics = evaluate(self._model, val_loader, self._device, class_weights=class_weights)
+            val_metrics = evaluate(model, val_loader, self._device, class_weights=class_weights)
             train_metrics = classification_metrics_from_confusion_matrix(train_confusion_matrix)
 
             epoch_log = {
