@@ -67,11 +67,10 @@ class Simulator:
             'TRAIN': self.__handle_train,
             'INFERENCE': self.__handle_inference,
         }
-
         self._fl_server = FLServer(config)
         initial_model = self._fl_server.model
         self._dtas = {
-            f'Hospital-{i}' : DTAggregate(config, experiment, initial_model, seed)
+            f'Hospital-{i}' : DTAggregate(f'Hospital-{i}', config, experiment, initial_model, seed)
             for i in  config.number_of_hospitals
         }
         self._mapping_dtas_dts = mapping_dtas_dts
@@ -162,18 +161,6 @@ class Simulator:
             dta.unregister_active_dt(patient_id)
             self._state.active_patients.remove(patient_id)
 
-    # def __handle_train(self, event: Event):
-    #     current_time = event.time
-    #     print(f'========= Training at:{current_time} =========')
-    #     self._dt_aggregate.update_data_from_dts(current_time)
-    #     if self._dt_aggregate.trainable_dt_count == 0:
-    #         print('========= Training skipped: no trainable active DTs =========')
-    #         return
-    #     self._dt_aggregate.train(current_time)
-    #     self._dt_aggregate.notify_new_model()
-    #     self._state.last_training_time = current_time
-    #     self._state.last_inference_results = []
-
     def __handle_train(self, event: Event):
         current_time = event.time
         print(f'========= Training at:{current_time} =========')
@@ -181,10 +168,13 @@ class Simulator:
         for dta in self._dtas.values():
             dta.update_data_from_dts(current_time)
 
-        for _ in range(self._config.fl_global_rounds):
+        for gr in range(self._config.fl_global_rounds):
             ## 1. Local training
             for dta in self._dtas.values():
-                dta.train(current_time)
+                if dta.trainable_dt_count == 0:
+                    print(f'========= Training skipped for DTA {dta.dta_id}: no trainable active DTs =========')
+                    continue
+                dta.train(current_time, gr)
 
             ## 2. Get local models from DTAs
             models = [dta.model() for dta in self._dtas.values()]
