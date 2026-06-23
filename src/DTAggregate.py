@@ -18,12 +18,8 @@ from src.distributed.utils import (
 
 class DTAggregate:
 
-    def __init__(self, config: LearningConfig, experiment: str, seed: int):
-        self._model = GlucoseClassifierLSTM(
-            hidden_size = config.hidden_size,
-            num_layers = config.layers,
-            dropout = config.dropout,
-        )
+    def __init__(self, config: LearningConfig, experiment: str, initial_model, seed: int):
+        self._model = initial_model
         self._device = config.device
         self._config = config
         self._dts_data = {}
@@ -62,6 +58,16 @@ class DTAggregate:
     @property
     def model(self) -> dict[str, torch.Tensor]:
         return self._model.state_dict()
+
+    @model.setter
+    def model(self, value):
+        fresh = GlucoseClassifierLSTM(
+            hidden_size=config.hidden_size,
+            num_layers=config.layers,
+            dropout=config.dropout,
+        )
+        fresh.load_state_dict(value)
+        self._model = fresh
 
     @property
     def statistics(self) -> tuple[float, float]:

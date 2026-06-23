@@ -67,9 +67,14 @@ class Simulator:
             'TRAIN': self.__handle_train,
             'INFERENCE': self.__handle_inference,
         }
-        self._dtas = { f'Hospital-{i}' : DTAggregate(config, experiment, seed) for i in  config.number_of_hospitals }
-        self._mapping_dtas_dts = mapping_dtas_dts
+
         self._fl_server = FLServer(config)
+        initial_model = self._fl_server.model
+        self._dtas = {
+            f'Hospital-{i}' : DTAggregate(config, experiment, initial_model, seed)
+            for i in  config.number_of_hospitals
+        }
+        self._mapping_dtas_dts = mapping_dtas_dts
         self._monitors = []
         self._experiment = experiment
 
@@ -175,7 +180,7 @@ class Simulator:
 
         for dta in self._dtas.values():
             dta.update_data_from_dts(current_time)
-        
+
         for _ in range(self._config.fl_global_rounds):
             ## 1. Local training
             for dta in self._dtas.values():
@@ -188,7 +193,11 @@ class Simulator:
             self._fl_server.receive_client_update(models)
             self._fl_server.aggregate()
 
-        ## 4. Notification of new model to HDTs
+            ## 4. Notify new model to DTAs
+            for dta in self._dtas.values():
+                dta.model = self._fl_server.model
+
+        ## 5. Notification of new model to HDTs
         for dta in self._dtas.values():
             dta.notify_new_model()
 
