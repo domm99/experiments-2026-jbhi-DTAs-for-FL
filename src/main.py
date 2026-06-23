@@ -1,7 +1,6 @@
 import glob
 import pandas as pd
 from pathlib import Path
-from codecarbon import track_emissions
 from src.distributed.utils import seed_everything
 from src.distributed.Simulator import Simulator, Event
 from src.distributed.LearningConfig import LearningConfig
