@@ -1,3 +1,18 @@
+## [1.5.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.4.1...1.5.0) (2026-06-24)
+
+### Features
+
+* add some plotters ([cfc250e](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/cfc250e67425ab799104c585ba053c90e0e32b8f))
+
+### Bug Fixes
+
+* remove return false in function which should return none ([56952c3](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/56952c35906f554e23fc88e4184a8a022620f191))
+
+### General maintenance
+
+* increase number of global round ([c53e0a5](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/c53e0a5900d2fcb00b3042824ba3ad552babcd44))
+* **release:** update .env versions to 1.4.1 [skip ci] ([193c177](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/193c177e21822321d5cdd056a36155a69b8ad63b))
+
 ## [1.4.1](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.4.0...1.4.1) (2026-06-23)
 
 ### Bug Fixes
