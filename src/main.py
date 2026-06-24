@@ -5,7 +5,7 @@ from pathlib import Path
 from utils import seed_everything
 from simulator import Simulator, Event
 from LearningConfig import LearningConfig
-from Monitors import PeriodicInferenceMonitor
+from Monitors import PeriodicInferenceMonitor, PerformanceDriftMonitor, ADWINErrorDecentralizedRetrainingMonitor
 
 def balanced_split(xs, n):
     if n <= 0:
@@ -46,7 +46,33 @@ def schedule_trainings(experiment: str, simulator: Simulator, min_time: pd.Times
             )
             simulator.schedule_event(train_event)
             current_time = current_time + pd.DateOffset(months=months_step)
-
+    elif experiment == 'RetrainAfterPerformanceDrift':
+        PerformanceDriftMonitor(
+            simulator=simulator,
+            bootstrap_months=config.drift_bootstrap_months,
+            inference_interval_days=config.drift_inference_interval_days,
+            retraining_delay_days=config.drift_retraining_delay_days,
+            metric_name=config.drift_metric_name,
+            degradation_threshold=config.drift_degradation_threshold,
+            degraded_dt_fraction_threshold=config.degraded_dt_fraction_threshold,
+            metric_floor=config.drift_metric_floor,
+            min_comparable_dts=config.drift_min_comparable_dts,
+            threshold_mode=config.drift_threshold_mode,
+            higher_is_worse=config.drift_higher_is_worse,
+        )
+    elif experiment in 'ADWINErrorDecentralizedRetrainingPolicy':
+        ADWINErrorDecentralizedRetrainingMonitor(
+            simulator=simulator,
+            bootstrap_months=config.drift_bootstrap_months,
+            inference_interval_days=config.drift_inference_interval_days,
+            retraining_delay_days=config.drift_retraining_delay_days,
+            delta=config.adwin_delta,
+            drifted_dt_fraction_threshold=config.degraded_dt_fraction_threshold,
+            min_comparable_dts=config.drift_min_comparable_dts,
+            reset_after_retrain=config.adwin_reset_after_retrain,
+        )
+    else:
+        raise ValueError(f'Unsupported experiment: {experiment}')
 
 def load_patients(data_folder: str) -> tuple[list[dict], pd.Timestamp, pd.Timestamp]:
     patients = []
@@ -136,7 +162,7 @@ if __name__ == '__main__':
     config = LearningConfig()
     data_folder = 'T1DiabetesGranada/split-labeled'
     seeds = [0]
-    experiments = ['RetrainAfterTime']
+    experiments = ['RetrainAfterPerformanceDrift'] # 'RetrainAfterPerformanceDrift', 'RetrainAfterTime'
 
     for experiment in experiments:
         print(f'Running experiment {experiment}')

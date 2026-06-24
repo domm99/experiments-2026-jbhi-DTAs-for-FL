@@ -42,6 +42,7 @@ class LearningConfig:
     adwin_drifted_dt_fraction_threshold: float = 0.1
     adwin_min_evaluated_dts: int = 5
     data_export_path: str = 'data'
+    adwin_reset_after_retrain: bool = True
     device: torch.device = get_current_device()
 
     ## FL
