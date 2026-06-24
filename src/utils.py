@@ -87,14 +87,13 @@ class GlucoseClassifierLSTM(nn.Module):
     def __init__(self, hidden_size: int, num_layers: int, dropout: float) -> None:
         super().__init__()
         lstm_dropout = dropout if num_layers > 1 else 0.0
-        self.rnn = nn.RNN(
+        self.rnn = nn.LSTM(
             input_size=1,
             hidden_size=hidden_size,
-            num_layers=1,
+            num_layers=num_layers,
             batch_first=True,
-            nonlinearity="tanh",
+            dropout=lstm_dropout,
         )
-        self.head = nn.Linear(hidden_size, len(CLASS_NAMES))
         self.head = nn.Linear(hidden_size, len(CLASS_NAMES))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

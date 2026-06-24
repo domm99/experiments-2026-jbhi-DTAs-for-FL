@@ -1,5 +1,4 @@
 import pandas as pd
-from pathlib import Path
 from simulator import Event, Monitor, Simulator
 
 class PeriodicInferenceMonitor(Monitor):
@@ -18,7 +17,7 @@ class PeriodicInferenceMonitor(Monitor):
     def on_event(self, event: Event) -> None:
         if event.event_type == 'TRAIN':
             if self._simulator.state.last_training_time == event.time:
-                self._schedule_next_inference(event.time, event.time)
+                self._schedule_next_inference(event.time, event.time, event.time)
             return
 
         if event.event_type != 'INFERENCE':
@@ -31,12 +30,13 @@ class PeriodicInferenceMonitor(Monitor):
         if self._simulator.state.last_training_time != last_training_time:
             return
 
-        self._schedule_next_inference(event.time, last_training_time)
+        self._schedule_next_inference(event.time, last_training_time, event.time)
 
     def _schedule_next_inference(
         self,
         current_time: pd.Timestamp,
         last_training_time: pd.Timestamp,
+        window_start_time: pd.Timestamp,
     ) -> bool:
         return self._simulator.schedule_event(
             Event(
@@ -45,6 +45,7 @@ class PeriodicInferenceMonitor(Monitor):
                 event_type='INFERENCE',
                 payload={
                     'last_training_time': last_training_time,
+                    'window_start_time': window_start_time,
                     'source': self._source,
                 },
             )

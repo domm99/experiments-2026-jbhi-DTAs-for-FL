@@ -1,5 +1,4 @@
 import glob
-import torch
 import random
 import pandas as pd
 from pathlib import Path
@@ -10,7 +9,9 @@ from Monitors import PeriodicInferenceMonitor
 
 def balanced_split(xs, n):
     if n <= 0:
-        raise ValueError("n must be greater than xs length")
+        raise ValueError("n must be greater than zero")
+    if n > len(xs):
+        raise ValueError("n must not be greater than xs length")
 
     k, r = divmod(len(xs), n)
 
@@ -34,26 +35,24 @@ def schedule_trainings(experiment: str, simulator: Simulator, min_time: pd.Times
             simulator=simulator,
             inference_interval_days=simulator.config.drift_inference_interval_days,
         )
-        current_time = min_time
-        i = 0
+        current_time = min_time + pd.DateOffset(months=simulator.config.drift_bootstrap_months)
         months_step = 3
         while current_time < max_time:
             train_event = Event(
-                time=min_time + pd.DateOffset(months=months_step*i),
+                time=current_time,
                 priority=1,
                 event_type='TRAIN',
                 payload={},
             )
             simulator.schedule_event(train_event)
             current_time = current_time + pd.DateOffset(months=months_step)
-            i += 1
 
 
 def load_patients(data_folder: str) -> tuple[list[dict], pd.Timestamp, pd.Timestamp]:
     patients = []
     global_min, global_max = None, None
 
-    for patient in glob.glob(f'{data_folder}/*.csv'):
+    for patient in sorted(glob.glob(f'{data_folder}/*.csv')):
         df = pd.read_csv(patient)
         df['timestamp'] = pd.to_datetime(
             df['Measurement_date'] + ' ' + df['Measurement_time']
@@ -73,7 +72,26 @@ def load_patients(data_folder: str) -> tuple[list[dict], pd.Timestamp, pd.Timest
     return patients, global_min, global_max
 
 
-def run_simulation(seed: int, experiment: str, config) -> None:
+def export_hospital_patient_mapping(
+    mapping_dtas_dts: dict[str, list[str]],
+    experiment: str,
+    config,
+    seed: int,
+) -> None:
+    rows = [
+        {'hospital_id': hospital_id, 'patient_id': patient_id}
+        for hospital_id, patient_ids in mapping_dtas_dts.items()
+        for patient_id in patient_ids
+    ]
+    Path(f'{config.data_export_path}/{experiment}').mkdir(parents=True, exist_ok=True)
+    mapping_df = pd.DataFrame(rows).sort_values(['hospital_id', 'patient_id'])
+    mapping_df.to_csv(
+        f'{config.data_export_path}/{experiment}/hospital_patient_mapping_seed_{seed}.csv',
+        index=False,
+    )
+
+
+def run_simulation(seed: int, experiment: str, config, data_folder: str) -> None:
     seed_everything(seed)
     all_patients, min_time, max_time = load_patients(data_folder)
 
@@ -81,6 +99,7 @@ def run_simulation(seed: int, experiment: str, config) -> None:
     print(f'Min: {min_time}, Max: {max_time}')
 
     mapping_dtas_dts = split_patients(all_patients, config)
+    export_hospital_patient_mapping(mapping_dtas_dts, experiment, config, seed)
 
     print('================================ Mapping hospitals-patients ================================')
     for h_id, patients in mapping_dtas_dts.items():
@@ -124,4 +143,4 @@ if __name__ == '__main__':
         exp_folder = f'{experiment}'
         Path(f'{config.data_export_path}/{exp_folder}').mkdir(parents=True, exist_ok=True)
         for seed in seeds:
-            run_simulation(seed, exp_folder, config)
+            run_simulation(seed, exp_folder, config, data_folder)

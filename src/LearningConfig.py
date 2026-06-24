@@ -47,4 +47,4 @@ class LearningConfig:
     ## FL
     fl_global_rounds: int = 8
     fl_local_epochs: int = 3
-    number_of_hospitals = 10
+    number_of_hospitals: int = 10

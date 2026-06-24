@@ -1,6 +1,6 @@
 import torch
 import pandas as pd
-from torch import nn
+from dataclasses import dataclass
 from DT import DT
 from LearningConfig import LearningConfig
 from utils import (
@@ -16,6 +16,13 @@ from utils import (
     update_confusion_matrix,
 )
 
+
+@dataclass
+class DTATrainingResult:
+    model: dict[str, torch.Tensor]
+    sample_count: int
+
+
 class DTAggregate:
 
     def __init__(self, mid, config: LearningConfig, experiment: str, initial_model, seed: int):
@@ -27,7 +34,8 @@ class DTAggregate:
         self._seed = seed
         self._active_dts = {}
         self._last_mean = 0.0
-        self._last_std = 0.0
+        self._last_std = 1.0
+        self._has_statistics = False
         self._experiment = experiment
 
     def update_data_from_dts(self, current_time: pd.Timestamp) -> None:
@@ -78,11 +86,18 @@ class DTAggregate:
     def statistics(self) -> tuple[float, float]:
         return self._last_mean, self._last_std
 
+    @property
+    def has_statistics(self) -> bool:
+        return self._has_statistics
+
     def notify_new_model(self):
+        if not self._has_statistics:
+            print(f'Skipping model notification for DTA {self._mid}: no local normalization stats yet')
+            return
         for dt in self._active_dts.values():
             dt.model = (self._model, self._last_mean, self._last_std)
 
-    def train(self, current_time: pd.Timestamp, global_round: int) -> None:
+    def train(self, current_time: pd.Timestamp, global_round: int) -> DTATrainingResult | None:
         model = GlucoseClassifierLSTM(
             hidden_size=self._config.hidden_size,
             num_layers=self._config.layers,
@@ -94,7 +109,7 @@ class DTAggregate:
         patients_series_raw = [series for series in self._dts_data.values() if series is not None]
         if not patients_series_raw:
             print('Skipping training: no DT has enough history for training windows yet')
-            return
+            return None
         mean, std = compute_train_stats(patients_series_raw)
         normalized_series = normalize_series(patients_series_raw, mean, std)
         train_loader, val_loader = create_train_val_loaders(
@@ -109,6 +124,7 @@ class DTAggregate:
             stride=self._config.stride,
             split="train",
         )
+        sample_count = int(class_counts.sum().item())
         loss_weights = class_weights.to(self._device)
         print(
             "Training class balance | "
@@ -175,5 +191,11 @@ class DTAggregate:
 
         metrics_df = pd.DataFrame(history)
         metrics_df.to_csv(f'{self._config.data_export_path}/{self._experiment}/training_{current_time}-hospital_{self._mid}-GR_{global_round}-seed_{self._seed}.csv', index=False)
+        self._model = {
+            key: value.detach().clone()
+            for key, value in model.state_dict().items()
+        }
         self._last_mean = mean
         self._last_std = std
+        self._has_statistics = True
+        return DTATrainingResult(model=self._model, sample_count=sample_count)

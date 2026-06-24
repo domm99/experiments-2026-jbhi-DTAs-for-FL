@@ -139,8 +139,9 @@ class Simulator:
         dta_id = self.__lookup_dta_from_patient_id(event.payload['patient_id'])
         dta = self._dtas[dta_id]
         dta.register_active_dt(local_dt, patient_id)
-        mean, std = dta.statistics
-        local_dt.model = (dta.model, mean, std)
+        if dta.has_statistics:
+            mean, std = dta.statistics
+            local_dt.model = (dta.model, mean, std)
 
     def __lookup_dta_from_patient_id(self, patient_id):
         for dta_id, dts in self._mapping_dtas_dts.items():
@@ -168,25 +169,36 @@ class Simulator:
         for dta in self._dtas.values():
             dta.update_data_from_dts(current_time)
 
+        completed_training = False
         for gr in range(self._config.fl_global_rounds):
             print(f'Global round:{gr}')
             ## 1. Local training
+            client_updates = []
             for dta in self._dtas.values():
                 if dta.trainable_dt_count == 0:
                     print(f'========= Training skipped for DTA {dta.dta_id}: no trainable active DTs =========')
                     continue
-                dta.train(current_time, gr)
+                training_result = dta.train(current_time, gr)
+                if training_result is not None:
+                    client_updates.append((training_result.model, training_result.sample_count))
 
             ## 2. Get local models from DTAs
-            models = [dta.model for dta in self._dtas.values()]
+            if not client_updates:
+                print('========= Global aggregation skipped: no DTA produced an update =========')
+                break
 
             ## 3. Global aggregation
-            self._fl_server.receive_client_update(models)
+            self._fl_server.receive_client_update(client_updates)
             self._fl_server.aggregate()
+            completed_training = True
 
             ## 4. Notify new model to DTAs
             for dta in self._dtas.values():
                 dta.model = self._fl_server.model
+
+        if not completed_training:
+            print(f'========= Training at {current_time} produced no global model update =========')
+            return
 
         ## 5. Notification of new model to HDTs
         for dta in self._dtas.values():
