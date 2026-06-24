@@ -1,3 +1,13 @@
+## [1.6.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.5.1...1.6.0) (2026-06-24)
+
+### Features
+
+* add support for adaptive policies ([2257f27](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/2257f2788f462b3de7d488b3e7b2ef276ca39147))
+
+### General maintenance
+
+* **release:** update .env versions to 1.5.1 [skip ci] ([d6352d4](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/d6352d4f4e2a97bde52cae8a182292ae3272ae7f))
+
 ## [1.5.1](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.5.0...1.5.1) (2026-06-24)
 
 ### Bug Fixes
