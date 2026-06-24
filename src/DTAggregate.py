@@ -94,8 +94,8 @@ class DTAggregate:
         patients_series_raw = [series for series in self._dts_data.values() if series is not None]
         if not patients_series_raw:
             print('Skipping training: no DT has enough history for training windows yet')
-            return False
-        mean, std = compute_train_stats(patients_series_raw) ## TODO (check) -- this is now done locally to each DTA, should they be agreed globally?
+            return
+        mean, std = compute_train_stats(patients_series_raw)
         normalized_series = normalize_series(patients_series_raw, mean, std)
         train_loader, val_loader = create_train_val_loaders(
             patient_series = normalized_series,
