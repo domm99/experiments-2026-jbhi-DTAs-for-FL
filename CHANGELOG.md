@@ -1,3 +1,13 @@
+## [1.5.1](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.5.0...1.5.1) (2026-06-24)
+
+### Bug Fixes
+
+* fix bugs on devices handling when they do not have enough data ([18f529a](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/18f529a0e2cadf234242d7abe72ee2f46bdb6376))
+
+### General maintenance
+
+* **release:** update .env versions to 1.5.0 [skip ci] ([6135eef](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/6135eefcec7bad5d78768857f41c3b9930efc2cd))
+
 ## [1.5.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.4.1...1.5.0) (2026-06-24)
 
 ### Features
