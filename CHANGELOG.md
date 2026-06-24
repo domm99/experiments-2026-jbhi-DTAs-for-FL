@@ -1,3 +1,14 @@
+## [1.7.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.6.0...1.7.0) (2026-06-24)
+
+### Features
+
+* implement hierarchical trigghering of retrain based on ADWIN ([5487e9a](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/5487e9a4efcdf7a7d8196b2e6962faaff673f9c6))
+* implement schedule training for adaptive policies ([529f384](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/529f384e3944ec82b8ad94457d28feb8711ebf28))
+
+### General maintenance
+
+* **release:** update .env versions to 1.6.0 [skip ci] ([82c7759](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/82c7759691a97bf45ffde60ce1465db0cf6da8b5))
+
 ## [1.6.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.5.1...1.6.0) (2026-06-24)
 
 ### Features
