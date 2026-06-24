@@ -45,6 +45,6 @@ class LearningConfig:
     device: torch.device = get_current_device()
 
     ## FL
-    fl_global_rounds: int = 5
-    fl_local_epochs: int = 2
+    fl_global_rounds: int = 8
+    fl_local_epochs: int = 3
     number_of_hospitals = 10
