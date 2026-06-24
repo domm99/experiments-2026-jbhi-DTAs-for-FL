@@ -101,6 +101,8 @@ class DT:
                 'precision': float('nan'),
                 'recall': float('nan'),
                 'f1_score': float('nan'),
+                'prediction_y_true': [],
+                'prediction_y_pred': [],
             }
             self.__export_test_metrics(metrics, current_time)
             return metrics
@@ -121,10 +123,12 @@ class DT:
                 'precision': float('nan'),
                 'recall': float('nan'),
                 'f1_score': float('nan'),
+                'prediction_y_true': [],
+                'prediction_y_pred': [],
             }
             self.__export_test_metrics(metrics, current_time)
             return metrics
-        metrics = evaluate(self._model, loader, self._config.device)
+        metrics = evaluate(self._model, loader, self._config.device, return_predictions=True)
         metrics['status'] = 'evaluated'
         metrics['num_points'] = num_points
         self.__export_test_metrics(metrics, current_time)
@@ -178,11 +182,15 @@ class DT:
 
     def __export_test_metrics(self, metrics: dict, current_time: pd.Timestamp):
         metrics['dt_id'] = self._mid
+        export_metrics = {
+            key: value for key, value in metrics.items()
+            if key not in {'prediction_y_true', 'prediction_y_pred'}
+        }
         output_path = f'{self._config.data_export_path}/{self._experiment}/test_{current_time}-seed_{self._seed}.csv'
         files = glob.glob(output_path)
         if len(files) == 0:
-            metrics_df = pd.DataFrame([metrics])
+            metrics_df = pd.DataFrame([export_metrics])
         else:
             metrics_df = pd.read_csv(output_path)
-            metrics_df = pd.concat([metrics_df, pd.DataFrame([metrics])], ignore_index=True)
+            metrics_df = pd.concat([metrics_df, pd.DataFrame([export_metrics])], ignore_index=True)
         metrics_df.to_csv(output_path, index=False)

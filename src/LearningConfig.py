@@ -28,19 +28,21 @@ class LearningConfig:
     drift_retraining_delay_days: int = 1
     drift_metric_name: str = 'f1_score'
     
-    drift_degradation_threshold: float = 0.15 # THIS
+    drift_degradation_threshold: float = 0.1 # THIS
 
     drift_metric_floor: float | None = None
     drift_min_comparable_dts: int = 5
     drift_threshold_mode: str = 'relative'
     drift_higher_is_worse: bool = False
     
-    degraded_dt_fraction_threshold: float = 0.1 ## THIS
+    degraded_dt_fraction_threshold: float = 0.2 ## THIS
     
     adwin_delta: float = 0.1
     adwin_inference_interval_days: int = 1
     adwin_drifted_dt_fraction_threshold: float = 0.1
     adwin_min_evaluated_dts: int = 5
+    adwin_drifted_dta_fraction_threshold: float = 0.1
+    adwin_min_evaluated_dtas: int = 1
     data_export_path: str = 'data'
     adwin_reset_after_retrain: bool = True
     device: torch.device = get_current_device()

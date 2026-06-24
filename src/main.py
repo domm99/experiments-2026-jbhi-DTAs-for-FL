@@ -60,15 +60,20 @@ def schedule_trainings(experiment: str, simulator: Simulator, min_time: pd.Times
             threshold_mode=config.drift_threshold_mode,
             higher_is_worse=config.drift_higher_is_worse,
         )
-    elif experiment in 'ADWINErrorDecentralizedRetrainingPolicy':
+    elif experiment in {
+        'ADWINErrorDecentralizedRetrainingPolicy',
+        'ADWINErrorHierarchicalRetrainingPolicy',
+    }:
         ADWINErrorDecentralizedRetrainingMonitor(
             simulator=simulator,
             bootstrap_months=config.drift_bootstrap_months,
-            inference_interval_days=config.drift_inference_interval_days,
+            inference_interval_days=config.adwin_inference_interval_days,
             retraining_delay_days=config.drift_retraining_delay_days,
             delta=config.adwin_delta,
-            drifted_dt_fraction_threshold=config.degraded_dt_fraction_threshold,
-            min_comparable_dts=config.drift_min_comparable_dts,
+            drifted_dt_fraction_threshold=config.adwin_drifted_dt_fraction_threshold,
+            min_comparable_dts=config.adwin_min_evaluated_dts,
+            drifted_dta_fraction_threshold=config.adwin_drifted_dta_fraction_threshold,
+            min_comparable_dtas=config.adwin_min_evaluated_dtas,
             reset_after_retrain=config.adwin_reset_after_retrain,
         )
     else:
@@ -162,7 +167,7 @@ if __name__ == '__main__':
     config = LearningConfig()
     data_folder = 'T1DiabetesGranada/split-labeled'
     seeds = [0]
-    experiments = ['RetrainAfterPerformanceDrift'] # 'RetrainAfterPerformanceDrift', 'RetrainAfterTime'
+    experiments = ['ADWINErrorHierarchicalRetrainingPolicy']
 
     for experiment in experiments:
         print(f'Running experiment {experiment}')

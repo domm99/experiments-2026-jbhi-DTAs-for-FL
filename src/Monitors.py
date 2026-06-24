@@ -327,7 +327,7 @@ class PerformanceDriftMonitor(Monitor):
 
 
 class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
-    POLICY_NAME = 'ADWINErrorDecentralizedRetrainingPolicy'
+    POLICY_NAME = 'ADWINErrorHierarchicalRetrainingPolicy'
 
     def __init__(
         self,
@@ -338,6 +338,8 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
         delta: float = 0.01,
         drifted_dt_fraction_threshold: float = 0.3,
         min_comparable_dts: int = 1,
+        drifted_dta_fraction_threshold: float = 0.3,
+        min_comparable_dtas: int = 1,
         reset_after_retrain: bool = True,
         train_priority: int = 1,
         inference_priority: int = 2,
@@ -351,18 +353,24 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
         self._source = self.POLICY_NAME
         self._training_pending = False
         self._prediction_timestep = 0
+        self._delta = delta
+        self._drifted_dt_fraction_threshold = drifted_dt_fraction_threshold
+        self._min_comparable_dts = min_comparable_dts
+        self._drifted_dta_fraction_threshold = drifted_dta_fraction_threshold
+        self._min_comparable_dtas = min_comparable_dtas
+        self._reset_after_retrain = reset_after_retrain
+        self._dta_policies: dict[str, ADWINErrorDecentralizedRetrainingPolicy] = {}
+        self._first_dt_drift_times: dict[str, pd.Timestamp] = {}
+        self._pending_dta_signal_times: dict[str, pd.Timestamp] = {}
+        self._pending_dta_first_dt_drift_times: dict[str, pd.Timestamp] = {}
+        self._total_dt_drifts = 0
+        self._total_dta_signals = 0
         self._total_retraining_triggers = 0
-        self._policy = ADWINErrorDecentralizedRetrainingPolicy(
-            delta=delta,
-            drifted_dt_fraction_threshold=drifted_dt_fraction_threshold,
-            min_comparable_dts=min_comparable_dts,
-            reset_after_retrain=reset_after_retrain,
-        )
 
     def on_start(self) -> None:
         self._schedule_train(
             self._simulator.time + pd.DateOffset(months=self._bootstrap_months),
-            reason='adwin_error_decentralized_bootstrap',
+            reason='adwin_error_hierarchical_bootstrap',
         )
 
     def on_event(self, event: Event) -> None:
@@ -370,16 +378,22 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             if self._simulator.state.last_training_time != event.time:
                 self._training_pending = False
                 return
-            adwin_reset = self._policy.on_retrain()
+            self._export_completed_retraining_delays(event.time)
+            adwin_reset = self._reset_policies_after_retrain()
+            self._first_dt_drift_times = {}
+            self._pending_dta_signal_times = {}
+            self._pending_dta_first_dt_drift_times = {}
             self._training_pending = False
             print(
                 f'{self.POLICY_NAME} | retraining_timestep={event.time} | '
-                f'delta={self._policy.delta} | adwin_reset={adwin_reset} | '
-                f'total_dt_drifts={self._policy.total_dt_drifts} | '
+                f'delta={self._delta} | adwin_reset={adwin_reset} | '
+                f'total_dt_drifts={self._total_dt_drifts} | '
+                f'total_dta_signals={self._total_dta_signals} | '
                 f'total_retraining_triggers={self._total_retraining_triggers}'
             )
             self._schedule_inference(
                 event.time + pd.DateOffset(days=self._inference_interval_days),
+                event.time,
                 event.time,
             )
             return
@@ -395,11 +409,12 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
         if self._simulator.state.last_training_time != last_training_time:
             return
 
+        evaluated_dt_counts_by_dta: dict[str, int] = {}
+        drifted_dt_ids_by_dta: dict[str, set[str]] = {}
         evaluated_dt_count = 0
         prediction_count = 0
         error_count = 0
-        drifted_dt_ids: set[str] = set()
-        drift_updates: list[tuple[str, ADWINErrorUpdate]] = []
+        drift_updates: list[tuple[str, str, ADWINErrorUpdate]] = []
         widths: list[float] = []
         estimations: list[float] = []
 
@@ -407,15 +422,18 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             if result.get('status') != 'evaluated':
                 continue
             dt_id = result['dt_id']
+            dta_id = self._simulator.dta_id_for_dt(dt_id)
             y_true_values = result.get('prediction_y_true') or []
             y_pred_values = result.get('prediction_y_pred') or []
             if not y_true_values or not y_pred_values:
                 continue
 
             evaluated_dt_count += 1
+            evaluated_dt_counts_by_dta[dta_id] = evaluated_dt_counts_by_dta.get(dta_id, 0) + 1
+            dta_policy = self._policy_for_dta(dta_id)
             for y_true, y_pred in zip(y_true_values, y_pred_values, strict=False):
                 self._prediction_timestep += 1
-                update = self._policy.update(
+                update = dta_policy.update(
                     dt_id=dt_id,
                     y_true=y_true,
                     y_pred=y_pred,
@@ -428,26 +446,52 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
                 if not update.drift_detected:
                     continue
 
-                drifted_dt_ids.add(dt_id)
-                drift_updates.append((dt_id, update))
+                self._total_dt_drifts += 1
+                self._first_dt_drift_times.setdefault(dta_id, detection_time)
+                drifted_dt_ids_by_dta.setdefault(dta_id, set()).add(dt_id)
+                drift_updates.append((dta_id, dt_id, update))
                 self._export_dt_drift_event(
                     detection_time=detection_time,
                     last_training_time=last_training_time,
+                    dta_id=dta_id,
                     dt_id=dt_id,
                     update=update,
                 )
 
-        decision = self._policy.decide(
-            drifted_dt_ids=drifted_dt_ids,
-            evaluated_dt_count=evaluated_dt_count,
+        new_signaling_dta_ids: list[str] = []
+        for dta_id, dta_evaluated_dt_count in sorted(evaluated_dt_counts_by_dta.items()):
+            dta_policy = self._policy_for_dta(dta_id)
+            decision = dta_policy.decide(
+                drifted_dt_ids=drifted_dt_ids_by_dta.get(dta_id, set()),
+                evaluated_dt_count=dta_evaluated_dt_count,
+            )
+            if not decision.retrain or dta_id in self._pending_dta_signal_times:
+                continue
+            self._pending_dta_signal_times[dta_id] = detection_time
+            self._pending_dta_first_dt_drift_times[dta_id] = self._first_dt_drift_times.get(dta_id, detection_time)
+            self._total_dta_signals += 1
+            new_signaling_dta_ids.append(dta_id)
+            self._export_dta_signal_event(
+                detection_time=detection_time,
+                last_training_time=last_training_time,
+                dta_id=dta_id,
+                decision=decision,
+            )
+
+        dta_count = max(len(self._simulator.dta_ids), 1)
+        signaled_dta_ids = sorted(self._pending_dta_signal_times)
+        signaled_dta_fraction = len(signaled_dta_ids) / dta_count
+        global_retrain = (
+            dta_count >= self._min_comparable_dtas
+            and signaled_dta_fraction >= self._drifted_dta_fraction_threshold
         )
         retraining_timestep = None
         train_event_scheduled = False
-        if decision.retrain and not self._training_pending:
+        if global_retrain and not self._training_pending:
             scheduled_training_time = detection_time + pd.DateOffset(days=self._retraining_delay_days)
             train_event_scheduled = self._schedule_train(
                 scheduled_training_time,
-                reason='adwin_error_decentralized_drift',
+                reason='adwin_error_hierarchical_drift',
             )
             self._training_pending = train_event_scheduled
             if train_event_scheduled:
@@ -457,7 +501,9 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
                 detection_time=detection_time,
                 last_training_time=last_training_time,
                 scheduled_training_time=scheduled_training_time,
-                decision=decision,
+                dta_count=dta_count,
+                signaled_dta_ids=signaled_dta_ids,
+                signaled_dta_fraction=signaled_dta_fraction,
                 train_event_scheduled=train_event_scheduled,
             )
 
@@ -465,7 +511,10 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             detection_time=detection_time,
             prediction_count=prediction_count,
             error_count=error_count,
-            decision=decision,
+            evaluated_dt_count=evaluated_dt_count,
+            dta_count=dta_count,
+            signaled_dta_ids=signaled_dta_ids,
+            signaled_dta_fraction=signaled_dta_fraction,
             mean_width=self._mean_or_none(widths),
             max_width=max(widths) if widths else None,
             mean_estimation=self._mean_or_none(estimations),
@@ -477,7 +526,12 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             prediction_count=prediction_count,
             error_count=error_count,
             drift_count_in_batch=len(drift_updates),
-            decision=decision,
+            evaluated_dt_count=evaluated_dt_count,
+            evaluated_dta_count=len(evaluated_dt_counts_by_dta),
+            dta_count=dta_count,
+            new_signaling_dta_ids=new_signaling_dta_ids,
+            signaled_dta_ids=signaled_dta_ids,
+            signaled_dta_fraction=signaled_dta_fraction,
             mean_width=self._mean_or_none(widths),
             max_width=max(widths) if widths else None,
             mean_estimation=self._mean_or_none(estimations),
@@ -487,6 +541,7 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
         self._schedule_inference(
             detection_time + pd.DateOffset(days=self._inference_interval_days),
             last_training_time,
+            detection_time,
         )
 
     def _schedule_train(self, time: pd.Timestamp, reason: str) -> bool:
@@ -499,7 +554,12 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             )
         )
 
-    def _schedule_inference(self, time: pd.Timestamp, last_training_time: pd.Timestamp) -> bool:
+    def _schedule_inference(
+        self,
+        time: pd.Timestamp,
+        last_training_time: pd.Timestamp,
+        window_start_time: pd.Timestamp,
+    ) -> bool:
         return self._simulator.schedule_event(
             Event(
                 time=time,
@@ -507,18 +567,38 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
                 event_type='INFERENCE',
                 payload={
                     'last_training_time': last_training_time,
+                    'window_start_time': window_start_time,
                     'source': self._source,
                     'policy': self.POLICY_NAME,
                 },
             )
         )
 
+    def _policy_for_dta(self, dta_id: str) -> ADWINErrorDecentralizedRetrainingPolicy:
+        if dta_id not in self._dta_policies:
+            self._dta_policies[dta_id] = ADWINErrorDecentralizedRetrainingPolicy(
+                delta=self._delta,
+                drifted_dt_fraction_threshold=self._drifted_dt_fraction_threshold,
+                min_comparable_dts=self._min_comparable_dts,
+                reset_after_retrain=self._reset_after_retrain,
+            )
+        return self._dta_policies[dta_id]
+
+    def _reset_policies_after_retrain(self) -> bool:
+        reset_any = False
+        for policy in self._dta_policies.values():
+            reset_any = policy.on_retrain() or reset_any
+        return reset_any
+
     def _print_log(
         self,
         detection_time: pd.Timestamp,
         prediction_count: int,
         error_count: int,
-        decision: ADWINErrorDecentralizedDecision,
+        evaluated_dt_count: int,
+        dta_count: int,
+        signaled_dta_ids: list[str],
+        signaled_dta_fraction: float,
         mean_width,
         max_width,
         mean_estimation,
@@ -526,14 +606,17 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
     ) -> None:
         print(
             f'{self.POLICY_NAME} | timestep={detection_time} | '
-            f'delta={self._policy.delta} | '
+            f'delta={self._delta} | '
             f'prediction_count={prediction_count} | '
             f'prediction_error_count={error_count} | '
-            f'evaluated_dt_count={decision.evaluated_dt_count} | '
-            f'drifted_dt_count={len(decision.drifted_dt_ids)} | '
-            f'drifted_dt_fraction={decision.drifted_dt_fraction:.6f} | '
-            f'drifted_dt_fraction_threshold={decision.drifted_dt_fraction_threshold} | '
-            f'total_dt_drifts={decision.total_dt_drifts} | '
+            f'evaluated_dt_count={evaluated_dt_count} | '
+            f'signaled_dta_count={len(signaled_dta_ids)} | '
+            f'dta_count={dta_count} | '
+            f'signaled_dta_fraction={signaled_dta_fraction:.6f} | '
+            f'drifted_dt_fraction_threshold={self._drifted_dt_fraction_threshold} | '
+            f'drifted_dta_fraction_threshold={self._drifted_dta_fraction_threshold} | '
+            f'total_dt_drifts={self._total_dt_drifts} | '
+            f'total_dta_signals={self._total_dta_signals} | '
             f'total_retraining_triggers={self._total_retraining_triggers} | '
             f'adwin_mean_width={mean_width} | '
             f'adwin_max_width={max_width} | '
@@ -548,7 +631,12 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
         prediction_count: int,
         error_count: int,
         drift_count_in_batch: int,
-        decision: ADWINErrorDecentralizedDecision,
+        evaluated_dt_count: int,
+        evaluated_dta_count: int,
+        dta_count: int,
+        new_signaling_dta_ids: list[str],
+        signaled_dta_ids: list[str],
+        signaled_dta_fraction: float,
         mean_width,
         max_width,
         mean_estimation,
@@ -562,18 +650,25 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             'prediction_count': prediction_count,
             'prediction_error_count': error_count,
             'adwin_drift_count_in_batch': drift_count_in_batch,
-            'evaluated_dt_count': decision.evaluated_dt_count,
-            'drifted_dt_count': len(decision.drifted_dt_ids),
-            'drifted_dt_fraction': decision.drifted_dt_fraction,
-            'drifted_dt_fraction_threshold': decision.drifted_dt_fraction_threshold,
-            'min_comparable_dts': decision.min_comparable_dts,
-            'drifted_dt_ids': '|'.join(decision.drifted_dt_ids),
+            'evaluated_dt_count': evaluated_dt_count,
+            'evaluated_dta_count': evaluated_dta_count,
+            'dta_count': dta_count,
+            'new_signaling_dta_count': len(new_signaling_dta_ids),
+            'new_signaling_dta_ids': '|'.join(new_signaling_dta_ids),
+            'signaled_dta_count': len(signaled_dta_ids),
+            'signaled_dta_ids': '|'.join(signaled_dta_ids),
+            'signaled_dta_fraction': signaled_dta_fraction,
+            'drifted_dt_fraction_threshold': self._drifted_dt_fraction_threshold,
+            'drifted_dta_fraction_threshold': self._drifted_dta_fraction_threshold,
+            'min_comparable_dts': self._min_comparable_dts,
+            'min_comparable_dtas': self._min_comparable_dtas,
             'adwin_mean_width': mean_width,
             'adwin_max_width': max_width,
             'adwin_mean_estimation': mean_estimation,
-            'delta': self._policy.delta,
-            'reset_after_retrain': self._policy.reset_after_retrain,
-            'total_dt_drifts': decision.total_dt_drifts,
+            'delta': self._delta,
+            'reset_after_retrain': self._reset_after_retrain,
+            'total_dt_drifts': self._total_dt_drifts,
+            'total_dta_signals': self._total_dta_signals,
             'total_retraining_triggers': self._total_retraining_triggers,
             'retraining_timestep': retraining_timestep,
             'train_event_scheduled': train_event_scheduled,
@@ -585,6 +680,7 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
         self,
         detection_time: pd.Timestamp,
         last_training_time: pd.Timestamp,
+        dta_id: str,
         dt_id: str,
         update: ADWINErrorUpdate,
     ) -> None:
@@ -592,6 +688,7 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             'policy': self.POLICY_NAME,
             'timestep': detection_time,
             'last_training_time': last_training_time,
+            'dta_id': dta_id,
             'dt_id': dt_id,
             'stream_timestep': update.timestep,
             'error': update.error,
@@ -599,17 +696,47 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             'adwin_width': update.width,
             'adwin_estimation': update.estimation,
             'dt_total_drifts': update.total_drifts,
-            'total_dt_drifts': self._policy.total_dt_drifts,
+            'total_dt_drifts': self._total_dt_drifts,
             'simulation_end_time': self._simulator.ending_time,
         }
         self._append_csv(metrics, f'{self.POLICY_NAME}_dt_drift_events-seed_{self._simulator.seed}.csv')
+
+    def _export_dta_signal_event(
+        self,
+        detection_time: pd.Timestamp,
+        last_training_time: pd.Timestamp,
+        dta_id: str,
+        decision: ADWINErrorDecentralizedDecision,
+    ) -> None:
+        first_dt_drift_time = self._pending_dta_first_dt_drift_times[dta_id]
+        metrics = {
+            'policy': self.POLICY_NAME,
+            'timestep': detection_time,
+            'last_training_time': last_training_time,
+            'dta_id': dta_id,
+            'first_local_dt_drift_time': first_dt_drift_time,
+            'dta_signal_time': detection_time,
+            'local_signal_delay_days': self._days_between(first_dt_drift_time, detection_time),
+            'evaluated_dt_count': decision.evaluated_dt_count,
+            'drifted_dt_count': len(decision.drifted_dt_ids),
+            'drifted_dt_fraction': decision.drifted_dt_fraction,
+            'drifted_dt_fraction_threshold': decision.drifted_dt_fraction_threshold,
+            'min_comparable_dts': decision.min_comparable_dts,
+            'drifted_dt_ids': '|'.join(decision.drifted_dt_ids),
+            'total_dt_drifts': self._total_dt_drifts,
+            'total_dta_signals': self._total_dta_signals,
+            'simulation_end_time': self._simulator.ending_time,
+        }
+        self._append_csv(metrics, f'{self.POLICY_NAME}_dta_signal_events-seed_{self._simulator.seed}.csv')
 
     def _export_retraining_event(
         self,
         detection_time: pd.Timestamp,
         last_training_time: pd.Timestamp,
         scheduled_training_time: pd.Timestamp,
-        decision: ADWINErrorDecentralizedDecision,
+        dta_count: int,
+        signaled_dta_ids: list[str],
+        signaled_dta_fraction: float,
         train_event_scheduled: bool,
     ) -> None:
         metrics = {
@@ -618,18 +745,41 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             'last_training_time': last_training_time,
             'scheduled_training_time': scheduled_training_time,
             'train_event_scheduled': train_event_scheduled,
-            'evaluated_dt_count': decision.evaluated_dt_count,
-            'drifted_dt_count': len(decision.drifted_dt_ids),
-            'drifted_dt_fraction': decision.drifted_dt_fraction,
-            'drifted_dt_fraction_threshold': decision.drifted_dt_fraction_threshold,
-            'min_comparable_dts': decision.min_comparable_dts,
-            'drifted_dt_ids': '|'.join(decision.drifted_dt_ids),
-            'total_dt_drifts': decision.total_dt_drifts,
+            'dta_count': dta_count,
+            'signaled_dta_count': len(signaled_dta_ids),
+            'signaled_dta_fraction': signaled_dta_fraction,
+            'drifted_dta_fraction_threshold': self._drifted_dta_fraction_threshold,
+            'min_comparable_dtas': self._min_comparable_dtas,
+            'signaled_dta_ids': '|'.join(signaled_dta_ids),
+            'total_dt_drifts': self._total_dt_drifts,
+            'total_dta_signals': self._total_dta_signals,
             'total_retraining_triggers': self._total_retraining_triggers,
-            'delta': self._policy.delta,
+            'delta': self._delta,
             'simulation_end_time': self._simulator.ending_time,
         }
         self._append_csv(metrics, f'{self.POLICY_NAME}_retraining_events-seed_{self._simulator.seed}.csv')
+
+    def _export_completed_retraining_delays(self, retraining_time: pd.Timestamp) -> None:
+        if not self._pending_dta_signal_times:
+            return
+
+        for dta_id in sorted(self._pending_dta_signal_times):
+            first_dt_drift_time = self._pending_dta_first_dt_drift_times[dta_id]
+            dta_signal_time = self._pending_dta_signal_times[dta_id]
+            metrics = {
+                'policy': self.POLICY_NAME,
+                'dta_id': dta_id,
+                'first_local_dt_drift_time': first_dt_drift_time,
+                'dta_signal_time': dta_signal_time,
+                'retraining_time': retraining_time,
+                'first_local_dt_to_retrain_delay_days': self._days_between(first_dt_drift_time, retraining_time),
+                'dta_signal_to_retrain_delay_days': self._days_between(dta_signal_time, retraining_time),
+                'total_dt_drifts': self._total_dt_drifts,
+                'total_dta_signals': self._total_dta_signals,
+                'total_retraining_triggers': self._total_retraining_triggers,
+                'simulation_end_time': self._simulator.ending_time,
+            }
+            self._append_csv(metrics, f'{self.POLICY_NAME}_dta_retraining_delays-seed_{self._simulator.seed}.csv')
 
     def _append_csv(self, metrics: dict, filename: str) -> None:
         output_dir = Path(self._simulator.config.data_export_path) / self._simulator.experiment
@@ -649,3 +799,6 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             return None
         return float(sum(values) / len(values))
 
+    def _days_between(self, start_time: pd.Timestamp, end_time: pd.Timestamp) -> float:
+        delta = end_time - start_time
+        return float(delta.total_seconds() / 86400.0)

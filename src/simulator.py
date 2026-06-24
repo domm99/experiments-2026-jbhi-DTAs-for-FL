@@ -102,6 +102,13 @@ class Simulator:
     def experiment(self) -> str:
         return self._experiment
 
+    @property
+    def dta_ids(self) -> list[str]:
+        return list(self._dtas.keys())
+
+    def dta_id_for_dt(self, dt_id: str) -> str:
+        return self.__lookup_dta_from_patient_id(dt_id)
+
     def __dispatch(self, event: Event):
         self._handlers[event.event_type](event)
 

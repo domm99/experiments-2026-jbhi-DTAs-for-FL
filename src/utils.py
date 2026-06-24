@@ -406,12 +406,15 @@ def evaluate(
     loader: DataLoader,
     device: torch.device,
     class_weights: torch.Tensor | None = None,
-) -> dict[str, float]:
+    return_predictions: bool = False,
+) -> dict:
     model.eval()
     total_loss = 0.0
     total_loss_normalization = 0.0
     confusion_matrix = torch.zeros((len(CLASS_NAMES), len(CLASS_NAMES)), dtype=torch.long)
     loss_weights = class_weights.to(device) if class_weights is not None else None
+    y_true_values: list[int] = []
+    y_pred_values: list[int] = []
 
     with torch.no_grad():
         for x, y in loader:
@@ -424,9 +427,16 @@ def evaluate(
             total_loss += loss_sum
             total_loss_normalization += loss_normalization
             update_confusion_matrix(confusion_matrix, y, predictions)
+            if return_predictions:
+                y_true_values.extend(y.detach().cpu().tolist())
+                y_pred_values.extend(predictions.detach().cpu().tolist())
 
     metrics = classification_metrics_from_confusion_matrix(confusion_matrix)
-    return {
+    result = {
         "loss": total_loss / max(total_loss_normalization, 1.0),
         **metrics,
     }
+    if return_predictions:
+        result["prediction_y_true"] = y_true_values
+        result["prediction_y_pred"] = y_pred_values
+    return result
