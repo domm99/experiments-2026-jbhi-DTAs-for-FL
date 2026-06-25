@@ -1,3 +1,4 @@
+import copy
 import torch
 import pandas as pd
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ class DTAggregate:
         self._last_std = 1.0
         self._has_statistics = False
         self._experiment = experiment
+        self._mu = 0.1
 
     def update_data_from_dts(self, current_time: pd.Timestamp) -> None:
         self._dts_data = {}
@@ -104,6 +106,13 @@ class DTAggregate:
             dropout=self._config.dropout,
         ).to(self._config.device)
         model.load_state_dict(self._model)
+
+        global_model = copy.deepcopy(model)
+        global_weights = [
+            param.detach().clone()
+            for param in global_model.parameters()
+        ]
+
         optimizer = torch.optim.Adam(model.parameters(), lr=self._config.learning_rate)
         history: list[dict[str, float]] = []
         patients_series_raw = [series for series in self._dts_data.values() if series is not None]
@@ -151,6 +160,7 @@ class DTAggregate:
                 optimizer.zero_grad()
                 logits = model(x)
                 loss, loss_sum, loss_normalization = cross_entropy_batch(logits, y, loss_weights)
+                loss = loss + self.proximal_term(model, global_weights)
                 loss.backward()
                 optimizer.step()
 
@@ -199,3 +209,10 @@ class DTAggregate:
         self._last_std = std
         self._has_statistics = True
         return DTATrainingResult(model=self._model, sample_count=sample_count)
+
+
+    def proximal_term(self, trained_model, server_model):
+        prox_term = 0.0
+        for p_i, param in enumerate(trained_model.parameters()):
+            prox_term += (self._mu / 2) * torch.norm((param - server_model[p_i])) ** 2
+        return prox_term
