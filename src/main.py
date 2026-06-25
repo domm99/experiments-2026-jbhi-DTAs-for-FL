@@ -20,6 +20,127 @@ def balanced_split(xs, n):
         for i in range(n)
     ]
 
+def count_patient_labels(
+    patient_id: str,
+    data_dir: Path,
+    label_col: str = "target_any_within_t",
+) -> dict[str, int]:
+    csv_path = data_dir / f"{patient_id}.csv"
+
+    if not csv_path.exists():
+        raise FileNotFoundError(f"CSV not found for patient {patient_id}: {csv_path}")
+
+    df = pd.read_csv(csv_path)
+
+    if label_col not in df.columns:
+        raise ValueError(
+            f"Column '{label_col}' not found in {csv_path}. "
+            f"Available columns: {list(df.columns)}"
+        )
+
+    labels = df[label_col].astype(str).str.strip().str.lower()
+    counts = labels.value_counts().to_dict()
+
+    return {
+        "normal": counts.get("normal", 0),
+        "hyper": counts.get("hyper", 0),
+        "hypo": counts.get("hypo", 0),
+        "total": len(labels),
+    }
+
+def get_patient_score(
+    counts: dict[str, int],
+    target_label: str,
+) -> float:
+    total = counts["total"]
+
+    if total <= 0:
+        return 0.0
+
+    if target_label == "normal":
+        return counts["normal"] / total
+
+    if target_label == "hyper":
+        return counts["hyper"] / total
+
+    if target_label == "hypo":
+        return counts["hypo"] / total
+
+    if target_label == "event":
+        return (counts["hyper"] + counts["hypo"]) / total
+
+    raise ValueError(
+        "target_label must be one of: "
+        "'normal', 'hyper', 'hypo', 'event'"
+    )
+
+def split_patients_label_skew(
+    all_patients,
+    config,
+    data_dir: str | Path,
+    label_col: str = "target_any_within_t",
+    target_label: str = "event",
+    ascending: bool = True,
+    shuffle_ties: bool = True,
+) -> dict[str, list[str]]:
+    """
+    Patient-level label-skew split.
+
+    all_patients only needs to contain:
+        {"patient_id": "LIB193263"}
+
+    The function reads each patient CSV, computes the target label ratio,
+    sorts patients by that ratio, and assigns consecutive blocks to hospitals.
+
+    target_label:
+        "event"  -> hyper + hypo ratio
+        "hyper"  -> hyper ratio
+        "hypo"   -> hypo ratio
+        "normal" -> normal ratio
+    """
+
+    data_dir = Path(data_dir)
+
+    patient_scores = []
+
+    for patient in all_patients:
+        patient_id = patient["patient_id"]
+
+        counts = count_patient_labels(
+            patient_id=patient_id,
+            data_dir=data_dir,
+            label_col=label_col,
+        )
+
+        score = get_patient_score(
+            counts=counts,
+            target_label=target_label,
+        )
+
+        patient_scores.append({
+            "patient_id": patient_id,
+            "score": score,
+            "counts": counts,
+        })
+
+    if shuffle_ties:
+        random.shuffle(patient_scores)
+
+    patient_scores = sorted(
+        patient_scores,
+        key=lambda x: x["score"],
+        reverse=not ascending,
+    )
+
+    patient_ids = [p["patient_id"] for p in patient_scores]
+
+    split = balanced_split(patient_ids, config.number_of_hospitals)
+
+    return {
+        f"Hospital-{h}": patients
+        for h, patients in enumerate(split)
+    }
+
 def split_patients(all_patients, config) -> dict[str, list[str]]:
     ids = [p['patient_id'] for p in all_patients]
     random.shuffle(ids)
@@ -122,14 +243,18 @@ def export_hospital_patient_mapping(
     )
 
 
-def run_simulation(seed: int, experiment: str, config, data_folder: str) -> None:
+def run_simulation(seed: int, experiment: str, config, data_folder: str, iid: bool) -> None:
     seed_everything(seed)
     all_patients, min_time, max_time = load_patients(data_folder)
 
     print(f'Found {len(all_patients)} patients')
     print(f'Min: {min_time}, Max: {max_time}')
 
-    mapping_dtas_dts = split_patients(all_patients, config)
+    if iid:
+        mapping_dtas_dts = split_patients(all_patients, config)
+    else:
+        mapping_dtas_dts = split_patients_label_skew(all_patients, config, data_folder)
+
     export_hospital_patient_mapping(mapping_dtas_dts, experiment, config, seed)
 
     print('================================ Mapping hospitals-patients ================================')
@@ -167,11 +292,12 @@ if __name__ == '__main__':
     config = LearningConfig()
     data_folder = 'T1DiabetesGranada/split-labeled'
     seeds = [0]
-    experiments = ['ADWINErrorHierarchicalRetrainingPolicy']
+    experiments = ['RetrainAfterTime'] # ADWINErrorHierarchicalRetrainingPolicy
+    iid = False
 
     for experiment in experiments:
         print(f'Running experiment {experiment}')
         exp_folder = f'{experiment}'
         Path(f'{config.data_export_path}/{exp_folder}').mkdir(parents=True, exist_ok=True)
         for seed in seeds:
-            run_simulation(seed, exp_folder, config, data_folder)
+            run_simulation(seed, exp_folder, config, data_folder, iid)
