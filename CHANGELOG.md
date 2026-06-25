@@ -1,3 +1,15 @@
+## [1.8.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.7.0...1.8.0) (2026-06-25)
+
+### Features
+
+* implement fedprox ([9b34bcc](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/9b34bcc70d6212208804a8f15ae027d7cc7e448a))
+* implement non-iid skew ([6b30d04](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/6b30d04f7b20de2fe352f52b2032bd40b712b7b5))
+
+### General maintenance
+
+* add license ([c15fd12](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/c15fd1260296bc1752c0ef45bf88a3a27c183fbe))
+* **release:** update .env versions to 1.7.0 [skip ci] ([c42dcc9](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/c42dcc9aa77ee931760cdc3d140468480a02789a))
+
 ## [1.7.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.6.0...1.7.0) (2026-06-24)
 
 ### Features
