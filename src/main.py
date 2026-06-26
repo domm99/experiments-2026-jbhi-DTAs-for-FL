@@ -243,7 +243,7 @@ def export_hospital_patient_mapping(
     )
 
 
-def run_simulation(seed: int, experiment: str, config, data_folder: str, iid: bool) -> None:
+def run_simulation(seed: int, experiment: str, config, data_folder: str, iid: bool, only_local_learning: bool) -> None:
     seed_everything(seed)
     all_patients, min_time, max_time = load_patients(data_folder)
 
@@ -261,7 +261,7 @@ def run_simulation(seed: int, experiment: str, config, data_folder: str, iid: bo
     for h_id, patients in mapping_dtas_dts.items():
         print(f'Hospital ID: {h_id} has {len(patients)} patients')
 
-    simulator = Simulator(data_folder, experiment, min_time, max_time, config, seed, mapping_dtas_dts)
+    simulator = Simulator(data_folder, experiment, min_time, max_time, config, seed, mapping_dtas_dts, only_local_learning)
 
     # Schedule patients activation and deactivation
     for patient in all_patients:
@@ -292,12 +292,14 @@ if __name__ == '__main__':
     config = LearningConfig()
     data_folder = 'T1DiabetesGranada/split-labeled'
     seeds = [0]
-    experiments = ['RetrainAfterTime'] # ADWINErrorHierarchicalRetrainingPolicy
+    # ADWINErrorHierarchicalRetrainingPolicy, RetrainAfterTime
+    experiments = ['RetrainAfterTime']
     iid = False
+    only_local_learning = True
 
     for experiment in experiments:
         print(f'Running experiment {experiment}')
         exp_folder = f'{experiment}'
         Path(f'{config.data_export_path}/{exp_folder}').mkdir(parents=True, exist_ok=True)
         for seed in seeds:
-            run_simulation(seed, exp_folder, config, data_folder, iid)
+            run_simulation(seed, exp_folder, config, data_folder, iid, only_local_learning)
