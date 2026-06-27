@@ -150,8 +150,47 @@ def split_patients(all_patients, config) -> dict[str, list[str]]:
         for h, patients in enumerate(split)
     }
 
+def cap_patients_for_hospitals(
+    mapping_dtas_dts: dict[str, list[str]],
+    hospital_patient_caps: dict[str, int],
+) -> dict[str, list[str]]:
+    if not hospital_patient_caps:
+        return mapping_dtas_dts
+
+    capped_hospitals = set(hospital_patient_caps)
+    receiver_hospitals = [
+        hospital_id for hospital_id in mapping_dtas_dts
+        if hospital_id not in capped_hospitals
+    ]
+    if not receiver_hospitals:
+        raise ValueError(
+            'At least one uncapped hospital is required to receive extra patients'
+        )
+
+    updated_mapping = {
+        hospital_id: list(patient_ids)
+        for hospital_id, patient_ids in mapping_dtas_dts.items()
+    }
+    extra_patients: list[str] = []
+
+    for hospital_id, patient_cap in hospital_patient_caps.items():
+        if hospital_id not in updated_mapping:
+            raise ValueError(f'Unknown hospital id: {hospital_id}')
+        if patient_cap < 0:
+            raise ValueError(f'Patient cap must be non-negative for {hospital_id}')
+
+        patients = updated_mapping[hospital_id]
+        updated_mapping[hospital_id] = patients[:patient_cap]
+        extra_patients.extend(patients[patient_cap:])
+
+    for index, patient_id in enumerate(extra_patients):
+        receiver_id = receiver_hospitals[index % len(receiver_hospitals)]
+        updated_mapping[receiver_id].append(patient_id)
+
+    return updated_mapping
+
 def schedule_trainings(experiment: str, simulator: Simulator, min_time: pd.Timestamp, max_time: pd.Timestamp) -> None:
-    if experiment == 'RetrainAfterTime':
+    if 'RetrainAfterTime' in experiment:
         PeriodicInferenceMonitor(
             simulator=simulator,
             inference_interval_days=simulator.config.drift_inference_interval_days,
@@ -184,6 +223,7 @@ def schedule_trainings(experiment: str, simulator: Simulator, min_time: pd.Times
     elif experiment in {
         'ADWINErrorDecentralizedRetrainingPolicy',
         'ADWINErrorHierarchicalRetrainingPolicy',
+        'ADWINErrorHierarchicalRetrainingPolicy-LowDataHospitals',
     }:
         ADWINErrorDecentralizedRetrainingMonitor(
             simulator=simulator,
@@ -243,7 +283,15 @@ def export_hospital_patient_mapping(
     )
 
 
-def run_simulation(seed: int, experiment: str, config, data_folder: str, iid: bool, only_local_learning: bool) -> None:
+def run_simulation(
+    seed: int,
+    experiment: str,
+    config,
+    data_folder: str,
+    iid: bool,
+    only_local_learning: bool,
+    hospital_patient_caps: dict[str, int] | None = None,
+) -> None:
     seed_everything(seed)
     all_patients, min_time, max_time = load_patients(data_folder)
 
@@ -254,6 +302,11 @@ def run_simulation(seed: int, experiment: str, config, data_folder: str, iid: bo
         mapping_dtas_dts = split_patients(all_patients, config)
     else:
         mapping_dtas_dts = split_patients_label_skew(all_patients, config, data_folder)
+
+    mapping_dtas_dts = cap_patients_for_hospitals(
+        mapping_dtas_dts,
+        hospital_patient_caps or {},
+    )
 
     export_hospital_patient_mapping(mapping_dtas_dts, experiment, config, seed)
 
@@ -293,13 +346,29 @@ if __name__ == '__main__':
     data_folder = 'T1DiabetesGranada/split-labeled'
     seeds = [0]
     # ADWINErrorHierarchicalRetrainingPolicy, RetrainAfterTime
-    experiments = ['RetrainAfterTime']
+    experiments = ['ADWINErrorHierarchicalRetrainingPolicy']
     iid = False
-    only_local_learning = True
+    only_local_learning = False
+    hospital_patient_caps = {
+        'Hospital-0': 10,
+        'Hospital-1': 5,
+    }
 
     for experiment in experiments:
         print(f'Running experiment {experiment}')
-        exp_folder = f'{experiment}'
+        exp_folder = (
+            f'{experiment}-LowDataHospitals'
+            if hospital_patient_caps
+            else f'{experiment}'
+        )
         Path(f'{config.data_export_path}/{exp_folder}').mkdir(parents=True, exist_ok=True)
         for seed in seeds:
-            run_simulation(seed, exp_folder, config, data_folder, iid, only_local_learning)
+            run_simulation(
+                seed,
+                exp_folder,
+                config,
+                data_folder,
+                iid,
+                only_local_learning,
+                hospital_patient_caps=hospital_patient_caps,
+            )
