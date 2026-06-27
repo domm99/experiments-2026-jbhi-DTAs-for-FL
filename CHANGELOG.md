@@ -1,3 +1,15 @@
+## [1.9.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.8.0...1.9.0) (2026-06-27)
+
+### Features
+
+* implement only local learning ([686d6f3](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/686d6f38ce1b7c016c15b8395fe7201a090e9a4b))
+* implement support for quantity skew across hospitals ([4abdd81](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/4abdd81ed5a9e1dcadd183455d451be508b6b240))
+
+### General maintenance
+
+* **release:** update .env versions to 1.8.0 [skip ci] ([905d395](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/905d39545793668216212a253a9e8273c3f86672))
+* update mu ([ff2db5b](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/ff2db5bd742b3306ed91e5dc19681f4966361214))
+
 ## [1.8.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.7.0...1.8.0) (2026-06-25)
 
 ### Features
