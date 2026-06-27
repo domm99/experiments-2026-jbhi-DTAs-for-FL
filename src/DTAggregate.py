@@ -38,7 +38,7 @@ class DTAggregate:
         self._last_std = 1.0
         self._has_statistics = False
         self._experiment = experiment
-        self._mu = 0.1
+        self._mu = 0.0
 
     def update_data_from_dts(self, current_time: pd.Timestamp) -> None:
         self._dts_data = {}
