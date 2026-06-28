@@ -223,7 +223,14 @@ class Simulator:
                 print(f'========= Training at {current_time} produced no global model update =========')
                 return
 
-        ## 5. Notification of new model to HDTs
+            ## 5. Local personalization
+            for dta in self._dtas.values():
+                if dta.trainable_dt_count == 0:
+                    print(f'========= Training skipped for DTA {dta.dta_id}: no trainable active DTs =========')
+                    continue
+                dta.train(current_time, 0)
+
+        ## 6. Notification of new model to HDTs
         for dta in self._dtas.values():
             dta.notify_new_model()
 
