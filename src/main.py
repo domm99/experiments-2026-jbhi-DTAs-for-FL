@@ -1,6 +1,7 @@
 import argparse
 import glob
 import random
+import shutil
 import pandas as pd
 from pathlib import Path
 from utils import seed_everything
@@ -342,6 +343,22 @@ def run_simulation(seed: int, exp_folder: str, config: LearningConfig) -> None:
     simulator.start()
 
 
+def prepare_output_dir(output_dir: Path, overwrite: bool) -> None:
+    """
+    Makes sure that the results of a run are never mixed with those of a
+    previous one: the output folder must be empty unless overwrite is set,
+    in which case its content is removed.
+    """
+    if output_dir.exists() and any(output_dir.iterdir()):
+        if not overwrite:
+            raise RuntimeError(
+                f'Output folder {output_dir} is not empty. Remove it, choose another '
+                'experiment_name or run with --set overwrite=true.'
+            )
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Run the DT/DTA federated learning simulation.')
     parser.add_argument(
@@ -367,7 +384,7 @@ def main() -> None:
     output_dir = Path(config.data_export_path) / exp_folder
 
     print(f'Running experiment {config.experiment} -> {output_dir}')
-    output_dir.mkdir(parents=True, exist_ok=True)
+    prepare_output_dir(output_dir, config.overwrite)
     save_config(config, output_dir)
 
     for seed in config.seeds:

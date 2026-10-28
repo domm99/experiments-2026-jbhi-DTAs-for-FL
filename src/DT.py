@@ -1,4 +1,3 @@
-import glob
 import torch
 import pandas as pd
 from collections import OrderedDict
@@ -104,7 +103,7 @@ class DT:
                 'prediction_y_true': [],
                 'prediction_y_pred': [],
             }
-            self.__export_test_metrics(metrics, current_time)
+            metrics['dt_id'] = self._mid
             return metrics
         loader, num_points = self.__test_loader_from_data(
             current_time,
@@ -126,12 +125,12 @@ class DT:
                 'prediction_y_true': [],
                 'prediction_y_pred': [],
             }
-            self.__export_test_metrics(metrics, current_time)
+            metrics['dt_id'] = self._mid
             return metrics
         metrics = evaluate(self._model, loader, self._config.device, return_predictions=True)
         metrics['status'] = 'evaluated'
         metrics['num_points'] = num_points
-        self.__export_test_metrics(metrics, current_time)
+        metrics['dt_id'] = self._mid
         return metrics
 
     def __upload_data(self, data_path: str, mid: str) -> pd.DataFrame:
@@ -179,18 +178,3 @@ class DT:
         if len(loader.dataset) == 0:
             return None, num_points
         return loader, num_points
-
-    def __export_test_metrics(self, metrics: dict, current_time: pd.Timestamp):
-        metrics['dt_id'] = self._mid
-        export_metrics = {
-            key: value for key, value in metrics.items()
-            if key not in {'prediction_y_true', 'prediction_y_pred'}
-        }
-        output_path = f'{self._config.data_export_path}/{self._experiment}/test_{current_time}-seed_{self._seed}.csv'
-        files = glob.glob(output_path)
-        if len(files) == 0:
-            metrics_df = pd.DataFrame([export_metrics])
-        else:
-            metrics_df = pd.read_csv(output_path)
-            metrics_df = pd.concat([metrics_df, pd.DataFrame([export_metrics])], ignore_index=True)
-        metrics_df.to_csv(output_path, index=False)

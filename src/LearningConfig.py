@@ -35,6 +35,8 @@ class LearningConfig:
     experiment_name: str | None = None
     data_folder: str = 'T1DiabetesGranada/split-labeled'
     data_export_path: str = 'data'
+    # Remove the content of a non-empty output folder instead of refusing to run
+    overwrite: bool = False
     seeds: list[int] = field(default_factory=lambda: [0])
     iid: bool = False
     only_local_learning: bool = False

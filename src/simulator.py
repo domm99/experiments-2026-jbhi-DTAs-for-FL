@@ -1,5 +1,6 @@
 import heapq
 from abc import ABC
+from pathlib import Path
 import pandas as pd
 from DT import DT
 from dataclasses import dataclass, field
@@ -85,6 +86,8 @@ class Simulator:
         self._monitors = []
         self._experiment = experiment
         self._only_local_learning = only_local_learning
+        self._output_dir = Path(config.data_export_path) / experiment
+        self._handled_inference_keys: set[tuple[pd.Timestamp, pd.Timestamp]] = set()
 
     def schedule_event(self, event: Event) -> bool:
         if event.time > self._ending_time:
@@ -247,6 +250,11 @@ class Simulator:
         if last_training_time != self._state.last_training_time:
             print('========= Inference skipped: stale inference event =========')
             return
+        inference_key = (current_time, last_training_time)
+        if inference_key in self._handled_inference_keys:
+            print('========= Inference skipped: duplicate inference event =========')
+            return
+        self._handled_inference_keys.add(inference_key)
         inference_results = []
         window_start_time = event.payload.get('window_start_time')
         active_dts_from_dtas = [dta.active_dts for dta in self._dtas.values()]
@@ -260,3 +268,22 @@ class Simulator:
             if metrics is not None:
                 inference_results.append(metrics)
         self._state.last_inference_results = inference_results
+        self.__export_test_metrics(inference_results, current_time)
+
+    def __export_test_metrics(self, inference_results: list[dict], current_time: pd.Timestamp) -> None:
+        if not inference_results:
+            return
+        output_path = self._output_dir / f'test_{current_time}-seed_{self.seed}.csv'
+        if output_path.exists():
+            raise RuntimeError(
+                f'{output_path} already exists: results of different runs would be mixed. '
+                'Use an empty output folder (or overwrite=true).'
+            )
+        rows = [
+            {
+                key: value for key, value in metrics.items()
+                if key not in {'prediction_y_true', 'prediction_y_pred'}
+            }
+            for metrics in inference_results
+        ]
+        pd.DataFrame(rows).to_csv(output_path, index=False)
