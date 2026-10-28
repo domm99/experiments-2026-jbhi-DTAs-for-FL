@@ -25,6 +25,7 @@ class LearningConfig:
     label_column: str = 'target_any_within_t'
     drift_bootstrap_months: int = 3
     drift_inference_interval_days: int = 3
+    retrain_after_time_inference_interval_days: int = 1
     drift_retraining_delay_days: int = 1
     drift_metric_name: str = 'f1_score'
     
