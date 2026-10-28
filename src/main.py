@@ -181,7 +181,11 @@ def cap_patients_for_hospitals(
         if patient_cap < 0:
             raise ValueError(f'Patient cap must be non-negative for {hospital_id}')
 
-        patients = updated_mapping[hospital_id]
+        # Keep a random subset of the hospital patients: with the label-skew
+        # split the list is sorted by event ratio, so truncating it would keep
+        # only the patients with the fewest events.
+        patients = list(updated_mapping[hospital_id])
+        random.shuffle(patients)
         updated_mapping[hospital_id] = patients[:patient_cap]
         extra_patients.extend(patients[patient_cap:])
 
