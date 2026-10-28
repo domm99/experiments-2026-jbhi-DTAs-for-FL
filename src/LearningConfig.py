@@ -91,6 +91,13 @@ class LearningConfig:
     number_of_hospitals: int = 10
     # FedProx proximal coefficient (mu = 0 is FedAvg)
     mu: float = 0.7
+    # Local fine-tuning of the aggregated model at each DTA after the federated
+    # rounds; the personalized model is deployed only to the DTs of that DTA.
+    personalization: bool = False
+    personalization_epochs: int = 3
+    # Proximal coefficient towards the global model during personalization
+    # (None = same as mu)
+    personalization_mu: float | None = None
 
     device: torch.device = field(default_factory=get_current_device)
 
@@ -155,7 +162,10 @@ def experiment_folder_name(config: LearningConfig) -> str:
     parts = [config.experiment]
     if config.hospital_patient_caps:
         parts.append('LowDataHospitals')
-    parts.append('Local' if config.only_local_learning else 'Federated')
+    if config.only_local_learning:
+        parts.append('Local')
+    else:
+        parts.append('FedPers' if config.personalization else 'Federated')
     parts.append('IID' if config.iid else 'NonIID')
     if not config.only_local_learning:
         parts.append(f'mu{config.mu:g}')

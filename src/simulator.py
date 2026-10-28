@@ -240,14 +240,28 @@ class Simulator:
                 print(f'========= Training at {current_time} produced no global model update =========')
                 return
 
-            # ## 5. Local personalization
-            # for dta in self._dtas.values():
-            #     if dta.trainable_dt_count == 0:
-            #         print(f'========= Training skipped for DTA {dta.dta_id}: no trainable active DTs =========')
-            #         continue
-            #     training_result = dta.train(current_time, 'PERS', start_from='global', epochs=self._config.fl_local_epochs, mu=self._config.mu)
-            #     if training_result is not None:
-            #         dta.deployed_model = training_result.model
+            ## 5. Local personalization: fine-tuning of the global model on the
+            ## local data set, deployed only to the DTs of the same DTA. The
+            ## global model is kept for the next federated round.
+            if self._config.personalization:
+                personalization_mu = (
+                    self._config.mu
+                    if self._config.personalization_mu is None
+                    else self._config.personalization_mu
+                )
+                for dta in self._dtas.values():
+                    if dta.trainable_dt_count == 0:
+                        print(f'========= Personalization skipped for DTA {dta.dta_id}: no trainable active DTs =========')
+                        continue
+                    training_result = dta.train(
+                        current_time,
+                        'PERS',
+                        start_from='global',
+                        epochs=self._config.personalization_epochs,
+                        mu=personalization_mu,
+                    )
+                    if training_result is not None:
+                        dta.deployed_model = training_result.model
 
         ## 6. Notification of new model to HDTs
         for dta in self._dtas.values():
