@@ -112,7 +112,24 @@ class LearningConfig:
     # (None = same as mu)
     personalization_mu: float | None = None
 
+    ## Local-only baseline (only_local_learning = true)
+    # Epochs of each local retraining. None = fl_global_rounds * fl_local_epochs
+    # + personalization_epochs, i.e. the same per-event training budget of the
+    # federated strategy with personalization.
+    local_epochs: int | None = None
+    # Proximal coefficient towards the previous local model (0 = plain training)
+    local_mu: float = 0.0
+    # 'dta': each DTA retrains alone when its own quorum p is reached (ADWIN
+    # policy); 'federation': all DTAs retrain together on the quorum q.
+    local_retrain_trigger: str = 'dta'
+
     device: torch.device = field(default_factory=get_current_device)
+
+
+def effective_local_epochs(config: 'LearningConfig') -> int:
+    if config.local_epochs is not None:
+        return config.local_epochs
+    return config.fl_global_rounds * config.fl_local_epochs + config.personalization_epochs
 
 
 def _parse_value(raw: str):
@@ -139,6 +156,10 @@ def validate_config(config: LearningConfig) -> None:
         raise ValueError('train_ratio must be in (0, 1]')
     if config.label_horizon_steps < 0:
         raise ValueError('label_horizon_steps must be non-negative')
+    if config.local_retrain_trigger not in {'dta', 'federation'}:
+        raise ValueError("local_retrain_trigger must be 'dta' or 'federation'")
+    if config.local_epochs is not None and config.local_epochs <= 0:
+        raise ValueError('local_epochs must be positive')
 
 
 def load_config(path: str | None = None, overrides: list[str] | None = None) -> LearningConfig:

@@ -165,6 +165,15 @@ class DTAggregate:
         self._has_statistics = True
         return True
 
+    def has_training_data(self, current_time: pd.Timestamp) -> bool:
+        for dt in self._training_source_dts().values():
+            try:
+                if dt.get_data(current_time) is not None:
+                    return True
+            except Exception:
+                continue
+        return False
+
     def deploy_to(self, dt: DT, current_time: pd.Timestamp) -> bool:
         """Deploys the current model to a DT, if a model and statistics are available."""
         if not self._has_model:

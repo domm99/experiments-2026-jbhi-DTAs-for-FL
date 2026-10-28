@@ -343,12 +343,21 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
         reset_after_retrain: bool = True,
         one_sided: bool = True,
         sticky_dt_flags: bool = True,
+        retrain_scope: str = 'federation',
         train_priority: int = 1,
         inference_priority: int = 2,
     ) -> None:
         super().__init__(simulator)
+        if retrain_scope not in {'federation', 'dta'}:
+            raise ValueError(f'Unsupported retrain_scope: {retrain_scope}')
         self._one_sided = one_sided
         self._sticky_dt_flags = sticky_dt_flags
+        # 'federation': all DTAs retrain when the quorum q of DTAs is reached;
+        # 'dta': each DTA retrains alone as soon as its own quorum p is reached
+        # (purely local baseline).
+        self._retrain_scope = retrain_scope
+        self._pending_train_dta_ids: set[str] = set()
+        self._scheduled_dta_trains: dict[pd.Timestamp, Event] = {}
         self._bootstrap_months = bootstrap_months
         self._inference_interval_days = inference_interval_days
         self._retraining_delay_days = retraining_delay_days
@@ -382,16 +391,31 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
 
     def on_event(self, event: Event) -> None:
         if event.event_type == 'TRAIN':
+            trained_dta_ids = event.payload.get('dta_ids')
+            if trained_dta_ids is not None:
+                self._scheduled_dta_trains.pop(event.time, None)
+                self._pending_train_dta_ids -= set(trained_dta_ids)
             if self._simulator.state.last_training_time != event.time:
                 self._training_pending = False
                 return
-            self._export_completed_retraining_delays(event.time)
-            adwin_reset = self._reset_policies_after_retrain()
-            self._first_dt_drift_times = {}
-            self._pending_dta_signal_times = {}
-            self._pending_dta_first_dt_drift_times = {}
-            self._eligible_dta_ids = set()
-            self._training_pending = False
+            if trained_dta_ids is None:
+                # Federated retraining: every DTA received a new model.
+                self._export_completed_retraining_delays(event.time)
+                adwin_reset = self._reset_policies_after_retrain()
+                self._first_dt_drift_times = {}
+                self._pending_dta_signal_times = {}
+                self._pending_dta_first_dt_drift_times = {}
+                self._eligible_dta_ids = set()
+                self._training_pending = False
+            else:
+                # Retraining of some DTAs only: reset only their state.
+                self._export_completed_retraining_delays(event.time, trained_dta_ids)
+                adwin_reset = self._reset_policies_after_retrain(trained_dta_ids)
+                for dta_id in trained_dta_ids:
+                    self._first_dt_drift_times.pop(dta_id, None)
+                    self._pending_dta_signal_times.pop(dta_id, None)
+                    self._pending_dta_first_dt_drift_times.pop(dta_id, None)
+                    self._eligible_dta_ids.discard(dta_id)
             print(
                 f'{self.POLICY_NAME} | retraining_timestep={event.time} | '
                 f'delta={self._delta} | adwin_reset={adwin_reset} | '
@@ -501,13 +525,45 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
         dta_count = max(len(self._simulator.dta_ids), 1)
         signaled_dta_ids = sorted(self._pending_dta_signal_times)
         signaled_dta_fraction = len(signaled_dta_ids) / dta_count
-        # Inter-institution quorum q (Eq. 3) over all the DTAs of the federation
-        global_retrain = (
-            len(self._eligible_dta_ids) >= self._min_comparable_dtas
-            and signaled_dta_fraction >= self._drifted_dta_fraction_threshold
-        )
         retraining_timestep = None
         train_event_scheduled = False
+
+        if self._simulator.only_local_learning:
+            # A DTA learning alone has no model until it trains on its own data:
+            # train it as soon as data is available instead of waiting for a
+            # retraining it cannot trigger (it has no predictions to monitor).
+            for dta_id in self._simulator.dta_ids_without_model():
+                if dta_id in self._pending_train_dta_ids:
+                    continue
+                if self._simulator.dta_has_training_data(dta_id, detection_time):
+                    self._schedule_dta_train(dta_id, detection_time, 'local_bootstrap')
+
+        if self._retrain_scope == 'dta':
+            for dta_id in signaled_dta_ids:
+                if dta_id in self._pending_train_dta_ids:
+                    continue
+                scheduled_training_time = self._schedule_dta_train(
+                    dta_id, detection_time, 'adwin_error_local_drift',
+                )
+                if scheduled_training_time is not None:
+                    train_event_scheduled = True
+                    retraining_timestep = scheduled_training_time
+                    self._export_retraining_event(
+                        detection_time=detection_time,
+                        last_training_time=last_training_time,
+                        scheduled_training_time=scheduled_training_time,
+                        dta_count=dta_count,
+                        signaled_dta_ids=[dta_id],
+                        signaled_dta_fraction=signaled_dta_fraction,
+                        train_event_scheduled=True,
+                    )
+            global_retrain = False
+        else:
+            # Inter-institution quorum q (Eq. 3) over all the DTAs of the federation
+            global_retrain = (
+                len(self._eligible_dta_ids) >= self._min_comparable_dtas
+                and signaled_dta_fraction >= self._drifted_dta_fraction_threshold
+            )
         if global_retrain and not self._training_pending:
             scheduled_training_time = detection_time + pd.DateOffset(days=self._retraining_delay_days)
             train_event_scheduled = self._schedule_train(
@@ -575,6 +631,35 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             )
         )
 
+    def _schedule_dta_train(self, dta_id: str, detection_time: pd.Timestamp, reason: str) -> pd.Timestamp | None:
+        """
+        Schedules the retraining of a single DTA. Retrainings of different DTAs
+        falling at the same time are merged into one TRAIN event.
+        """
+        time = detection_time + pd.DateOffset(days=self._retraining_delay_days)
+        scheduled_event = self._scheduled_dta_trains.get(time)
+        if scheduled_event is not None:
+            scheduled_event.payload['dta_ids'].append(dta_id)
+            scheduled_event.payload['reasons'][dta_id] = reason
+        else:
+            event = Event(
+                time=time,
+                priority=self._train_priority,
+                event_type='TRAIN',
+                payload={
+                    'reason': reason,
+                    'reasons': {dta_id: reason},
+                    'policy': self.POLICY_NAME,
+                    'dta_ids': [dta_id],
+                },
+            )
+            if not self._simulator.schedule_event(event):
+                return None
+            self._scheduled_dta_trains[time] = event
+        self._pending_train_dta_ids.add(dta_id)
+        self._total_retraining_triggers += 1
+        return time
+
     def _schedule_inference(
         self,
         time: pd.Timestamp,
@@ -607,9 +692,11 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             )
         return self._dta_policies[dta_id]
 
-    def _reset_policies_after_retrain(self) -> bool:
+    def _reset_policies_after_retrain(self, dta_ids: list[str] | None = None) -> bool:
         reset_any = False
-        for policy in self._dta_policies.values():
+        for dta_id, policy in self._dta_policies.items():
+            if dta_ids is not None and dta_id not in dta_ids:
+                continue
             reset_any = policy.on_retrain() or reset_any
         return reset_any
 
@@ -677,6 +764,7 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             'evaluated_dta_count': evaluated_dta_count,
             'eligible_dta_count': len(self._eligible_dta_ids),
             'sticky_dt_flags': self._sticky_dt_flags,
+            'retrain_scope': self._retrain_scope,
             'dta_count': dta_count,
             'new_signaling_dta_count': len(new_signaling_dta_ids),
             'new_signaling_dta_ids': '|'.join(new_signaling_dta_ids),
@@ -787,11 +875,17 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
         }
         self._append_csv(metrics, f'{self.POLICY_NAME}_retraining_events-seed_{self._simulator.seed}.csv')
 
-    def _export_completed_retraining_delays(self, retraining_time: pd.Timestamp) -> None:
+    def _export_completed_retraining_delays(
+        self,
+        retraining_time: pd.Timestamp,
+        dta_ids: list[str] | None = None,
+    ) -> None:
         if not self._pending_dta_signal_times:
             return
 
         for dta_id in sorted(self._pending_dta_signal_times):
+            if dta_ids is not None and dta_id not in dta_ids:
+                continue
             first_dt_drift_time = self._pending_dta_first_dt_drift_times[dta_id]
             dta_signal_time = self._pending_dta_signal_times[dta_id]
             metrics = {

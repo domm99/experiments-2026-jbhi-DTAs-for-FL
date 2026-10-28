@@ -5,7 +5,7 @@ import pandas as pd
 from DT import DT
 from dataclasses import dataclass, field
 from DTAggregate import DTAggregate
-from LearningConfig import LearningConfig
+from LearningConfig import LearningConfig, effective_local_epochs
 from FLServer import FLServer
 
 
@@ -126,6 +126,16 @@ class Simulator:
         """Number of patients assigned to the institution of a DTA."""
         return len(self._mapping_dtas_dts.get(dta_id, []))
 
+    @property
+    def only_local_learning(self) -> bool:
+        return self._only_local_learning
+
+    def dta_ids_without_model(self) -> list[str]:
+        return [dta_id for dta_id, dta in self._dtas.items() if not dta.has_model]
+
+    def dta_has_training_data(self, dta_id: str, current_time: pd.Timestamp) -> bool:
+        return self._dtas[dta_id].has_training_data(current_time)
+
     def __dispatch(self, event: Event):
         self._handlers[event.event_type](event)
 
@@ -188,7 +198,17 @@ class Simulator:
         current_time = event.time
         print(f'========= Training at:{current_time} =========')
 
-        for dta in self._dtas.values():
+        # DTAs to retrain: all of them, unless the event targets specific DTAs
+        # (local-only learning with per-DTA retraining).
+        target_dta_ids = event.payload.get('dta_ids')
+        if target_dta_ids is not None and not self._only_local_learning:
+            raise ValueError('Retraining of single DTAs is only supported with only_local_learning')
+        target_dtas = [
+            dta for dta in self._dtas.values()
+            if target_dta_ids is None or dta.dta_id in target_dta_ids
+        ]
+
+        for dta in target_dtas:
             dta.update_data_from_dts(current_time)
 
         # Per-DTA record of the training work done in this event (for the cost
@@ -204,22 +224,28 @@ class Simulator:
             if phase == 'federated':
                 work[dta_id]['federated_rounds'] += 1
 
+        updated_dtas = []
         if self._only_local_learning:
-            for dta in self._dtas.values():
+            local_epochs = effective_local_epochs(self._config)
+            for dta in target_dtas:
                 if dta.trainable_dt_count == 0:
                     print(f'========= Training skipped for DTA {dta.dta_id}: no trainable active DTs =========')
                     continue
+                # Same per-event training budget as the federated strategy and
+                # no proximal term (there is no shared model to stay close to).
                 training_result = dta.train(
                     current_time,
                     'GR_0',
                     start_from='deployed',
-                    epochs=self._config.fl_local_epochs,
-                    mu=self._config.mu,
+                    epochs=local_epochs,
+                    mu=self._config.local_mu,
                 )
                 if training_result is not None:
                     dta.global_model = training_result.model
-                    record(dta.dta_id, 'local', self._config.fl_local_epochs, training_result.sample_count)
+                    updated_dtas.append(dta)
+                    record(dta.dta_id, 'local', local_epochs, training_result.sample_count)
         else:
+            updated_dtas = list(self._dtas.values())
             completed_training = False
             for gr in range(self._config.fl_global_rounds):
                 print(f'Global round:{gr}')
@@ -283,8 +309,9 @@ class Simulator:
                         dta.deployed_model = training_result.model
                         record(dta.dta_id, 'personalization', self._config.personalization_epochs, training_result.sample_count)
 
-        ## 6. Notification of new model to HDTs
-        for dta in self._dtas.values():
+        ## 6. Notification of new model to HDTs (only DTAs whose model changed,
+        ## so that the evaluation windows of the other DTs are not reset)
+        for dta in updated_dtas:
             dta.notify_new_model(current_time)
 
         self._state.last_training_time = current_time
@@ -294,19 +321,20 @@ class Simulator:
     def __export_retraining_log(self, event: Event, work: dict[str, dict[str, int]], completed: bool) -> None:
         """One row per DTA and retraining event, with the training work it did."""
         self._retraining_event_count += 1
+        target_ids = event.payload.get('dta_ids') or list(self._dtas)
         rows = []
         for dta_id, dta_work in work.items():
             total_epochs = dta_work['federated_epochs'] + dta_work['personalization_epochs'] + dta_work['local_epochs']
             rows.append({
                 'retraining_index': self._retraining_event_count,
                 'time': event.time,
-                'reason': event.payload.get('reason'),
+                'reason': event.payload.get('reasons', {}).get(dta_id, event.payload.get('reason')),
                 'policy': event.payload.get('policy'),
                 'mode': 'local' if self._only_local_learning else 'federated',
                 'completed': completed,
                 'dta_id': dta_id,
                 'trained': total_epochs > 0,
-                'dts_with_data': self._dtas[dta_id].trainable_dt_count,
+                'dts_with_data': self._dtas[dta_id].trainable_dt_count if dta_id in target_ids else None,
                 'sample_count': dta_work['sample_count'],
                 'federated_rounds': dta_work['federated_rounds'],
                 'federated_epochs': dta_work['federated_epochs'],

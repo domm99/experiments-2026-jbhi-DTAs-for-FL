@@ -239,6 +239,11 @@ def schedule_trainings(simulator: Simulator, min_time: pd.Timestamp, max_time: p
             reset_after_retrain=config.adwin_reset_after_retrain,
             one_sided=config.adwin_one_sided,
             sticky_dt_flags=config.adwin_sticky_dt_flags,
+            retrain_scope=(
+                'dta'
+                if config.only_local_learning and config.local_retrain_trigger == 'dta'
+                else 'federation'
+            ),
         )
     else:
         raise ValueError(f'Unsupported experiment: {config.experiment}')
