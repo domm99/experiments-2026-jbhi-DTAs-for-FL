@@ -1,10 +1,11 @@
+import argparse
 import glob
 import random
 import pandas as pd
 from pathlib import Path
 from utils import seed_everything
 from simulator import Simulator, Event
-from LearningConfig import LearningConfig
+from LearningConfig import LearningConfig, experiment_folder_name, load_config, save_config
 from Monitors import PeriodicInferenceMonitor, PerformanceDriftMonitor, ADWINErrorDecentralizedRetrainingMonitor
 
 def balanced_split(xs, n):
@@ -189,24 +190,24 @@ def cap_patients_for_hospitals(
 
     return updated_mapping
 
-def schedule_trainings(experiment: str, simulator: Simulator, min_time: pd.Timestamp, max_time: pd.Timestamp) -> None:
-    if 'RetrainAfterTime' in experiment:
+def schedule_trainings(simulator: Simulator, min_time: pd.Timestamp, max_time: pd.Timestamp) -> None:
+    config = simulator.config
+    if config.experiment == 'RetrainAfterTime':
         PeriodicInferenceMonitor(
             simulator=simulator,
-            inference_interval_days=simulator.config.retrain_after_time_inference_interval_days,
+            inference_interval_days=config.retrain_after_time_inference_interval_days,
         )
-        current_time = min_time + pd.DateOffset(months=simulator.config.drift_bootstrap_months)
-        months_step = 3
+        current_time = min_time + pd.DateOffset(months=config.drift_bootstrap_months)
         while current_time < max_time:
             train_event = Event(
                 time=current_time,
                 priority=1,
                 event_type='TRAIN',
-                payload={},
+                payload={'reason': 'time_based'},
             )
             simulator.schedule_event(train_event)
-            current_time = current_time + pd.DateOffset(months=months_step)
-    elif experiment == 'RetrainAfterPerformanceDrift':
+            current_time = current_time + pd.DateOffset(months=config.time_based_interval_months)
+    elif config.experiment == 'RetrainAfterPerformanceDrift':
         PerformanceDriftMonitor(
             simulator=simulator,
             bootstrap_months=config.drift_bootstrap_months,
@@ -220,10 +221,9 @@ def schedule_trainings(experiment: str, simulator: Simulator, min_time: pd.Times
             threshold_mode=config.drift_threshold_mode,
             higher_is_worse=config.drift_higher_is_worse,
         )
-    elif experiment in {
+    elif config.experiment in {
         'ADWINErrorDecentralizedRetrainingPolicy',
         'ADWINErrorHierarchicalRetrainingPolicy',
-        'ADWINErrorHierarchicalRetrainingPolicy-LowDataHospitals',
     }:
         ADWINErrorDecentralizedRetrainingMonitor(
             simulator=simulator,
@@ -238,7 +238,7 @@ def schedule_trainings(experiment: str, simulator: Simulator, min_time: pd.Times
             reset_after_retrain=config.adwin_reset_after_retrain,
         )
     else:
-        raise ValueError(f'Unsupported experiment: {experiment}')
+        raise ValueError(f'Unsupported experiment: {config.experiment}')
 
 def load_patients(data_folder: str) -> tuple[list[dict], pd.Timestamp, pd.Timestamp]:
     patients = []
@@ -283,38 +283,40 @@ def export_hospital_patient_mapping(
     )
 
 
-def run_simulation(
-    seed: int,
-    experiment: str,
-    config,
-    data_folder: str,
-    iid: bool,
-    only_local_learning: bool,
-    hospital_patient_caps: dict[str, int] | None = None,
-) -> None:
+def run_simulation(seed: int, exp_folder: str, config: LearningConfig) -> None:
     seed_everything(seed)
+    data_folder = config.data_folder
     all_patients, min_time, max_time = load_patients(data_folder)
 
     print(f'Found {len(all_patients)} patients')
     print(f'Min: {min_time}, Max: {max_time}')
 
-    if iid:
+    if config.iid:
         mapping_dtas_dts = split_patients(all_patients, config)
     else:
-        mapping_dtas_dts = split_patients_label_skew(all_patients, config, data_folder)
+        mapping_dtas_dts = split_patients_label_skew(all_patients, config, data_folder, label_col=config.label_column)
 
     mapping_dtas_dts = cap_patients_for_hospitals(
         mapping_dtas_dts,
-        hospital_patient_caps or {},
+        config.hospital_patient_caps,
     )
 
-    export_hospital_patient_mapping(mapping_dtas_dts, experiment, config, seed)
+    export_hospital_patient_mapping(mapping_dtas_dts, exp_folder, config, seed)
 
     print('================================ Mapping hospitals-patients ================================')
     for h_id, patients in mapping_dtas_dts.items():
         print(f'Hospital ID: {h_id} has {len(patients)} patients')
 
-    simulator = Simulator(data_folder, experiment, min_time, max_time, config, seed, mapping_dtas_dts, only_local_learning)
+    simulator = Simulator(
+        data_folder,
+        exp_folder,
+        min_time,
+        max_time,
+        config,
+        seed,
+        mapping_dtas_dts,
+        config.only_local_learning,
+    )
 
     # Schedule patients activation and deactivation
     for patient in all_patients:
@@ -335,40 +337,42 @@ def run_simulation(
         simulator.schedule_event(event_inactive)
 
     # Schedule trainings and inferences
-    schedule_trainings(experiment, simulator, min_time, max_time)
+    schedule_trainings(simulator, min_time, max_time)
 
     simulator.start()
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description='Run the DT/DTA federated learning simulation.')
+    parser.add_argument(
+        '--config',
+        default=None,
+        help='TOML file with LearningConfig values (see configs/).',
+    )
+    parser.add_argument(
+        '--set',
+        dest='overrides',
+        action='append',
+        default=[],
+        metavar='KEY=VALUE',
+        help='Override a configuration value using TOML syntax, e.g. --set iid=true. Can be repeated.',
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    config = load_config(args.config, args.overrides)
+    exp_folder = experiment_folder_name(config)
+    output_dir = Path(config.data_export_path) / exp_folder
+
+    print(f'Running experiment {config.experiment} -> {output_dir}')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    save_config(config, output_dir)
+
+    for seed in config.seeds:
+        run_simulation(seed, exp_folder, config)
+
+
 if __name__ == '__main__':
-
-    config = LearningConfig()
-    data_folder = 'T1DiabetesGranada/split-labeled'
-    seeds = [0]
-    # ADWINErrorHierarchicalRetrainingPolicy, RetrainAfterTime
-    experiments = ['RetrainAfterTime']
-    iid = False
-    only_local_learning = False
-    hospital_patient_caps = {
-        #'Hospital-0': 10,
-        #'Hospital-1': 5,
-    }
-
-    for experiment in experiments:
-        print(f'Running experiment {experiment}')
-        exp_folder = (
-            f'{experiment}-LowDataHospitals'
-            if hospital_patient_caps
-            else f'{experiment}'
-        )
-        Path(f'{config.data_export_path}/{exp_folder}').mkdir(parents=True, exist_ok=True)
-        for seed in seeds:
-            run_simulation(
-                seed,
-                exp_folder,
-                config,
-                data_folder,
-                iid,
-                only_local_learning,
-                hospital_patient_caps=hospital_patient_caps,
-            )
+    main()
