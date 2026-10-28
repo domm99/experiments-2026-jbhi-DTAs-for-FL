@@ -28,6 +28,8 @@ class ADWINErrorDecentralizedDecision:
     drifted_dt_fraction_threshold: float
     min_comparable_dts: int
     total_dt_drifts: int
+    # Enough DTs have been evaluated for the quorum to be meaningful
+    eligible: bool = False
 
 class RetrainingPolicy:
 
@@ -158,7 +160,16 @@ class ADWINErrorRetrainingPolicy(RetrainingPolicy):
         return None
 
 class ADWINErrorDecentralizedRetrainingPolicy(RetrainingPolicy):
-    """Keeps one ADWIN error detector per DT and thresholds DT drift votes."""
+    """
+    Keeps one ADWIN error detector per DT and thresholds DT drift votes
+    (intra-institution quorum p, Eq. 2).
+
+    With sticky_dt_flags a DT that detected degradation keeps its flag until the
+    next retraining, and the quorum is computed over the DTs evaluated since
+    then; otherwise only the DTs whose detector fired in the current inference
+    batch are counted. The minimum number of evaluated DTs is capped by the
+    population of the DTA, so that small institutions can also signal.
+    """
 
     def __init__(
         self,
@@ -167,14 +178,18 @@ class ADWINErrorDecentralizedRetrainingPolicy(RetrainingPolicy):
         min_comparable_dts: int = 1,
         reset_after_retrain: bool = True,
         one_sided: bool = True,
+        sticky_dt_flags: bool = True,
     ) -> None:
         self.delta = delta
         self.drifted_dt_fraction_threshold = drifted_dt_fraction_threshold
         self.min_comparable_dts = min_comparable_dts
         self.reset_after_retrain = reset_after_retrain
         self.one_sided = one_sided
+        self.sticky_dt_flags = sticky_dt_flags
         self.total_dt_drifts = 0
         self._dt_policies: dict[str, ADWINErrorRetrainingPolicy] = {}
+        self._drifted_since_retrain: set[str] = set()
+        self._evaluated_since_retrain: set[str] = set()
 
     def update(self, dt_id: str, y_true, y_pred, timestep=None) -> ADWINErrorUpdate:
         if dt_id not in self._dt_policies:
@@ -188,28 +203,43 @@ class ADWINErrorDecentralizedRetrainingPolicy(RetrainingPolicy):
     def decide(
         self,
         drifted_dt_ids: set[str],
-        evaluated_dt_count: int,
+        evaluated_dt_ids: set[str],
+        population_size: int | None = None,
     ) -> ADWINErrorDecentralizedDecision:
-        sorted_drifted_dt_ids = sorted(drifted_dt_ids)
+        if self.sticky_dt_flags:
+            self._drifted_since_retrain |= set(drifted_dt_ids)
+            self._evaluated_since_retrain |= set(evaluated_dt_ids)
+            drifted, evaluated = self._drifted_since_retrain, self._evaluated_since_retrain
+        else:
+            drifted, evaluated = set(drifted_dt_ids), set(evaluated_dt_ids)
+
+        min_required = self.min_comparable_dts
+        if population_size is not None and population_size > 0:
+            min_required = min(min_required, population_size)
+
+        sorted_drifted_dt_ids = sorted(drifted)
+        evaluated_dt_count = len(evaluated)
         drifted_dt_fraction = 0.0
         if evaluated_dt_count > 0:
             drifted_dt_fraction = len(sorted_drifted_dt_ids) / evaluated_dt_count
 
-        retrain = (
-            evaluated_dt_count >= self.min_comparable_dts
-            and drifted_dt_fraction >= self.drifted_dt_fraction_threshold
-        )
+        eligible = evaluated_dt_count >= min_required
+        retrain = eligible and drifted_dt_fraction >= self.drifted_dt_fraction_threshold
         return ADWINErrorDecentralizedDecision(
             retrain=retrain,
             drifted_dt_ids=sorted_drifted_dt_ids,
             evaluated_dt_count=evaluated_dt_count,
             drifted_dt_fraction=drifted_dt_fraction,
             drifted_dt_fraction_threshold=self.drifted_dt_fraction_threshold,
-            min_comparable_dts=self.min_comparable_dts,
+            min_comparable_dts=min_required,
             total_dt_drifts=self.total_dt_drifts,
+            eligible=eligible,
         )
 
     def on_retrain(self) -> bool:
+        # Flags refer to the model that has just been replaced.
+        self._drifted_since_retrain = set()
+        self._evaluated_since_retrain = set()
         if not self.reset_after_retrain:
             return False
         for policy in self._dt_policies.values():
@@ -222,3 +252,4 @@ class ADWINErrorDecentralizedRetrainingPolicy(RetrainingPolicy):
             reset_after_retrain=False,
             one_sided=self.one_sided,
         )
+

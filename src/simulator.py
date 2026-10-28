@@ -122,6 +122,10 @@ class Simulator:
     def dta_id_for_dt(self, dt_id: str) -> str:
         return self.__lookup_dta_from_patient_id(dt_id)
 
+    def dta_population_size(self, dta_id: str) -> int:
+        """Number of patients assigned to the institution of a DTA."""
+        return len(self._mapping_dtas_dts.get(dta_id, []))
+
     def __dispatch(self, event: Event):
         self._handlers[event.event_type](event)
 

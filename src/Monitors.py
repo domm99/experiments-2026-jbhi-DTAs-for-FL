@@ -342,11 +342,13 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
         min_comparable_dtas: int = 1,
         reset_after_retrain: bool = True,
         one_sided: bool = True,
+        sticky_dt_flags: bool = True,
         train_priority: int = 1,
         inference_priority: int = 2,
     ) -> None:
         super().__init__(simulator)
         self._one_sided = one_sided
+        self._sticky_dt_flags = sticky_dt_flags
         self._bootstrap_months = bootstrap_months
         self._inference_interval_days = inference_interval_days
         self._retraining_delay_days = retraining_delay_days
@@ -365,6 +367,9 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
         self._first_dt_drift_times: dict[str, pd.Timestamp] = {}
         self._pending_dta_signal_times: dict[str, pd.Timestamp] = {}
         self._pending_dta_first_dt_drift_times: dict[str, pd.Timestamp] = {}
+        # DTAs that evaluated enough DTs since the last retraining for their
+        # quorum to be meaningful (checked against min_comparable_dtas)
+        self._eligible_dta_ids: set[str] = set()
         self._total_dt_drifts = 0
         self._total_dta_signals = 0
         self._total_retraining_triggers = 0
@@ -385,6 +390,7 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             self._first_dt_drift_times = {}
             self._pending_dta_signal_times = {}
             self._pending_dta_first_dt_drift_times = {}
+            self._eligible_dta_ids = set()
             self._training_pending = False
             print(
                 f'{self.POLICY_NAME} | retraining_timestep={event.time} | '
@@ -411,7 +417,7 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
         if self._simulator.state.last_training_time != last_training_time:
             return
 
-        evaluated_dt_counts_by_dta: dict[str, int] = {}
+        evaluated_dt_ids_by_dta: dict[str, set[str]] = {}
         drifted_dt_ids_by_dta: dict[str, set[str]] = {}
         evaluated_dt_count = 0
         prediction_count = 0
@@ -431,7 +437,7 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
                 continue
 
             evaluated_dt_count += 1
-            evaluated_dt_counts_by_dta[dta_id] = evaluated_dt_counts_by_dta.get(dta_id, 0) + 1
+            evaluated_dt_ids_by_dta.setdefault(dta_id, set()).add(dt_id)
             dta_policy = self._policy_for_dta(dta_id)
             for y_true, y_pred in zip(y_true_values, y_pred_values, strict=False):
                 self._prediction_timestep += 1
@@ -470,12 +476,15 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
                 )
 
         new_signaling_dta_ids: list[str] = []
-        for dta_id, dta_evaluated_dt_count in sorted(evaluated_dt_counts_by_dta.items()):
+        for dta_id, dta_evaluated_dt_ids in sorted(evaluated_dt_ids_by_dta.items()):
             dta_policy = self._policy_for_dta(dta_id)
             decision = dta_policy.decide(
                 drifted_dt_ids=drifted_dt_ids_by_dta.get(dta_id, set()),
-                evaluated_dt_count=dta_evaluated_dt_count,
+                evaluated_dt_ids=dta_evaluated_dt_ids,
+                population_size=self._simulator.dta_population_size(dta_id),
             )
+            if decision.eligible:
+                self._eligible_dta_ids.add(dta_id)
             if not decision.retrain or dta_id in self._pending_dta_signal_times:
                 continue
             self._pending_dta_signal_times[dta_id] = detection_time
@@ -492,8 +501,9 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
         dta_count = max(len(self._simulator.dta_ids), 1)
         signaled_dta_ids = sorted(self._pending_dta_signal_times)
         signaled_dta_fraction = len(signaled_dta_ids) / dta_count
+        # Inter-institution quorum q (Eq. 3) over all the DTAs of the federation
         global_retrain = (
-            dta_count >= self._min_comparable_dtas
+            len(self._eligible_dta_ids) >= self._min_comparable_dtas
             and signaled_dta_fraction >= self._drifted_dta_fraction_threshold
         )
         retraining_timestep = None
@@ -538,7 +548,7 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             error_count=error_count,
             drift_count_in_batch=len(drift_updates),
             evaluated_dt_count=evaluated_dt_count,
-            evaluated_dta_count=len(evaluated_dt_counts_by_dta),
+            evaluated_dta_count=len(evaluated_dt_ids_by_dta),
             dta_count=dta_count,
             new_signaling_dta_ids=new_signaling_dta_ids,
             signaled_dta_ids=signaled_dta_ids,
@@ -593,6 +603,7 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
                 min_comparable_dts=self._min_comparable_dts,
                 reset_after_retrain=self._reset_after_retrain,
                 one_sided=self._one_sided,
+                sticky_dt_flags=self._sticky_dt_flags,
             )
         return self._dta_policies[dta_id]
 
@@ -664,6 +675,8 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             'adwin_drift_count_in_batch': drift_count_in_batch,
             'evaluated_dt_count': evaluated_dt_count,
             'evaluated_dta_count': evaluated_dta_count,
+            'eligible_dta_count': len(self._eligible_dta_ids),
+            'sticky_dt_flags': self._sticky_dt_flags,
             'dta_count': dta_count,
             'new_signaling_dta_count': len(new_signaling_dta_ids),
             'new_signaling_dta_ids': '|'.join(new_signaling_dta_ids),

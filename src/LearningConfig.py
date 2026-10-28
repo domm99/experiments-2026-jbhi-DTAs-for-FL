@@ -82,10 +82,18 @@ class LearningConfig:
     ## ADWIN hierarchical policy
     adwin_delta: float = 0.1
     adwin_inference_interval_days: int = 1
-    adwin_drifted_dt_fraction_threshold: float = 0.1
+    # Intra-institution quorum p (Eq. 2): fraction of evaluated DTs in drift
+    adwin_drifted_dt_fraction_threshold: float = 0.2
+    # Minimum evaluated DTs for a DTA to signal (capped by its population)
     adwin_min_evaluated_dts: int = 5
-    adwin_drifted_dta_fraction_threshold: float = 0.1
+    # Inter-institution quorum q (Eq. 3): fraction of DTAs signalling. With 10
+    # DTAs, 0.3 requires at least three institutions (0.1 = any single one).
+    adwin_drifted_dta_fraction_threshold: float = 0.3
+    # Minimum number of DTAs with enough evaluated DTs since the last retraining
     adwin_min_evaluated_dtas: int = 1
+    # DT drift flags stay raised until the next retraining (Eq. 2 over the DTs
+    # evaluated since then); False counts only detections of the current day
+    adwin_sticky_dt_flags: bool = True
     adwin_reset_after_retrain: bool = True
     # Only increases of the error rate count as drift (ADWIN is two-sided)
     adwin_one_sided: bool = True

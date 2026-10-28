@@ -238,6 +238,7 @@ def schedule_trainings(simulator: Simulator, min_time: pd.Timestamp, max_time: p
             min_comparable_dtas=config.adwin_min_evaluated_dtas,
             reset_after_retrain=config.adwin_reset_after_retrain,
             one_sided=config.adwin_one_sided,
+            sticky_dt_flags=config.adwin_sticky_dt_flags,
         )
     else:
         raise ValueError(f'Unsupported experiment: {config.experiment}')
