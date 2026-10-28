@@ -42,6 +42,9 @@ class LearningConfig:
     only_local_learning: bool = False
     # e.g. {'Hospital-0': 5, 'Hospital-1': 5} for the quantity-skew setting
     hospital_patient_caps: dict[str, int] = field(default_factory=dict)
+    # Keep the data of patients that are no longer active in the DTA training
+    # set (Definition 1). False reproduces the old behaviour (active DTs only).
+    retain_inactive_patient_data: bool = True
 
     ## Model and local training
     layers: int = 1

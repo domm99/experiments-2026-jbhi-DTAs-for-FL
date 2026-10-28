@@ -47,6 +47,10 @@ class DTAggregate:
         self._dts_data = {}
         self._seed = seed
         self._active_dts = {}
+        # Every DT that has ever been registered: the local data set of the DTA
+        # (Definition 1) also contains the data of patients that are no longer
+        # monitored.
+        self._registered_dts = {}
         self._last_mean = 0.0
         self._last_std = 1.0
         self._has_statistics = False
@@ -61,9 +65,14 @@ class DTAggregate:
         # trained locally), i.e. something that can be deployed to the DTs.
         self._has_model = False
 
+    def _training_source_dts(self) -> dict[str, DT]:
+        if self._config.retain_inactive_patient_data:
+            return self._registered_dts
+        return self._active_dts
+
     def update_data_from_dts(self, current_time: pd.Timestamp) -> None:
         self._dts_data = {}
-        for dt_id, dt in self._active_dts.items():
+        for dt_id, dt in self._training_source_dts().items():
             try:
                 patient_series = dt.get_data(current_time)
                 if patient_series is None:
@@ -75,6 +84,7 @@ class DTAggregate:
 
     def register_active_dt(self, local_dt: DT, patient_id: str) -> None:
         self._active_dts[patient_id] = local_dt
+        self._registered_dts[patient_id] = local_dt
 
     def unregister_active_dt(self, patient_id: str) -> None:
         self._active_dts.pop(patient_id, None)
@@ -129,7 +139,7 @@ class DTAggregate:
         return self._has_statistics
 
     def _statistics_source_dts(self) -> dict[str, DT]:
-        return self._active_dts
+        return self._training_source_dts()
 
     def refresh_statistics(self, current_time: pd.Timestamp) -> bool:
         """
