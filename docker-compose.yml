@@ -1,47 +1,26 @@
+# One service per experiment configuration in configs/.
+# The dataset is mounted read-only; results are written to ./data on the host.
+x-experiment: &experiment
+  build: .
+  image: davidedomini99/experiments-2026-jbhi-dtas-for-fl:${VERSION:-latest}
+  volumes:
+    - ./T1DiabetesGranada:/experiment/T1DiabetesGranada:ro
+    - ./data:/experiment/data
+
 services:
 
-  experiment-spread-no-transfer:
-    hostname: spread-no-transfer
-    image: davidedomini99/experiments-2025-tcd-marl-neighbor-tl:0.1.2
-    volumes:
-      - davide.domini-volume:/experiment/data
-    environment:
-      DATA_OWNER: 1000:1000
-      LEARNING_HYPERPARAMETERS: |
-        all:
-          environment: SimpleSpread
-          transfer_enabled: False
-          restricted_communication: False
-          max_seed: 3
+  adwin-fedpers-noniid:
+    <<: *experiment
+    command: poetry run python3 src/main.py --config configs/adwin-fedpers-noniid.toml
 
-  experiment-spread-transfer-all:
-    hostname: spread-transfer-all
-    image: davidedomini99/experiments-2025-tcd-marl-neighbor-tl:0.1.2
-    volumes:
-      - davide.domini-volume:/experiment/data
-    environment:
-      DATA_OWNER: 1000:1000
-      LEARNING_HYPERPARAMETERS: |
-        all:
-          environment: SimpleSpread
-          transfer_enabled: True
-          restricted_communication: False
-          max_seed: 3
+  adwin-federated-noniid:
+    <<: *experiment
+    command: poetry run python3 src/main.py --config configs/adwin-federated-noniid.toml
 
-  experiment-spread-transfer-restr:
-    hostname: spread-transfer-restr
-    image: davidedomini99/experiments-2025-tcd-marl-neighbor-tl:0.1.2
-    volumes:
-      - davide.domini-volume:/experiment/data
-    environment:
-      DATA_OWNER: 1000:1000
-      LEARNING_HYPERPARAMETERS: |
-        all:
-          environment: SimpleSpread
-          transfer_enabled: True
-          restricted_communication: True
-          max_seed: 3
+  adwin-lowdata-fedpers:
+    <<: *experiment
+    command: poetry run python3 src/main.py --config configs/adwin-lowdata-fedpers.toml
 
-volumes:
-  davide.domini-volume:
-    external: true
+  adwin-lowdata-local:
+    <<: *experiment
+    command: poetry run python3 src/main.py --config configs/adwin-lowdata-local.toml

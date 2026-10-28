@@ -1,3 +1,7 @@
 dataset/
 data/
 env/
+T1DiabetesGranada/
+charts/
+paper/
+.venv/
