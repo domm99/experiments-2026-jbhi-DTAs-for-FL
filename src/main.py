@@ -193,7 +193,7 @@ def schedule_trainings(experiment: str, simulator: Simulator, min_time: pd.Times
     if 'RetrainAfterTime' in experiment:
         PeriodicInferenceMonitor(
             simulator=simulator,
-            inference_interval_days=simulator.config.drift_inference_interval_days,
+            inference_interval_days=simulator.config.retrain_after_time_inference_interval_days,
         )
         current_time = min_time + pd.DateOffset(months=simulator.config.drift_bootstrap_months)
         months_step = 3
@@ -346,12 +346,12 @@ if __name__ == '__main__':
     data_folder = 'T1DiabetesGranada/split-labeled'
     seeds = [0]
     # ADWINErrorHierarchicalRetrainingPolicy, RetrainAfterTime
-    experiments = ['ADWINErrorHierarchicalRetrainingPolicy']
+    experiments = ['RetrainAfterTime']
     iid = False
     only_local_learning = False
     hospital_patient_caps = {
-        'Hospital-0': 10,
-        'Hospital-1': 5,
+        #'Hospital-0': 10,
+        #'Hospital-1': 5,
     }
 
     for experiment in experiments:
