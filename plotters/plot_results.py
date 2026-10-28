@@ -1,7 +1,5 @@
 import argparse
-import glob
 import os
-import random
 import re
 import tempfile
 from pathlib import Path
@@ -33,41 +31,36 @@ METADATA_COLUMNS = {
 }
 
 
-def balanced_split(xs: list[str], n: int) -> list[list[str]]:
-    if n <= 0:
-        raise ValueError("number_of_hospitals must be greater than zero")
+def load_patient_hospital_map(results_dir: Path, seed: int) -> dict[str, str]:
+    mapping_path = results_dir / f"hospital_patient_mapping_seed_{seed}.csv"
+    if not mapping_path.exists():
+        raise FileNotFoundError(
+            f"Hospital-patient mapping not found for seed {seed}: {mapping_path}"
+        )
 
-    k, r = divmod(len(xs), n)
-    return [
-        xs[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)]
-        for i in range(n)
-    ]
+    mapping_df = pd.read_csv(mapping_path)
+    required_columns = {"hospital_id", "patient_id"}
+    missing_columns = required_columns - set(mapping_df.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"{mapping_path} is missing required column(s): {missing}")
+    if mapping_df.empty:
+        raise ValueError(f"{mapping_path} is empty")
 
-
-def build_patient_hospital_map(
-    patient_data_dir: Path,
-    seed: int,
-    number_of_hospitals: int,
-) -> dict[str, str]:
-    patient_files = glob.glob(str(patient_data_dir / "*.csv"))
-    if not patient_files:
-        raise FileNotFoundError(f"No patient CSV files found in {patient_data_dir}")
-
-    patient_ids: list[str] = []
-    for patient_file in patient_files:
-        patient_df = pd.read_csv(patient_file, usecols=["Patient_ID"])
-        if patient_df.empty:
-            continue
-        patient_ids.append(str(patient_df["Patient_ID"].iloc[0]))
-
-    rng = random.Random(seed)
-    rng.shuffle(patient_ids)
-    patient_groups = balanced_split(patient_ids, number_of_hospitals)
+    duplicated_patients = mapping_df["patient_id"].astype(str).duplicated(keep=False)
+    if duplicated_patients.any():
+        duplicates = sorted(
+            mapping_df.loc[duplicated_patients, "patient_id"].astype(str).unique()
+        )
+        preview = ", ".join(duplicates[:8])
+        raise ValueError(
+            f"{mapping_path} contains duplicated patient_id values. "
+            f"First duplicates: {preview}"
+        )
 
     return {
-        patient_id: f"Hospital-{hospital_index}"
-        for hospital_index, patients in enumerate(patient_groups)
-        for patient_id in patients
+        str(row.patient_id): str(row.hospital_id)
+        for row in mapping_df[["patient_id", "hospital_id"]].itertuples(index=False)
     }
 
 
@@ -118,11 +111,7 @@ def read_training_results(results_dir: Path) -> pd.DataFrame:
     )
 
 
-def read_test_results(
-    results_dir: Path,
-    patient_data_dir: Path,
-    number_of_hospitals: int,
-) -> pd.DataFrame:
+def read_test_results(results_dir: Path) -> pd.DataFrame:
     frames: list[pd.DataFrame] = []
     hospital_maps_by_seed: dict[int, dict[str, str]] = {}
 
@@ -137,11 +126,7 @@ def read_test_results(
             continue
 
         if seed not in hospital_maps_by_seed:
-            hospital_maps_by_seed[seed] = build_patient_hospital_map(
-                patient_data_dir=patient_data_dir,
-                seed=seed,
-                number_of_hospitals=number_of_hospitals,
-            )
+            hospital_maps_by_seed[seed] = load_patient_hospital_map(results_dir, seed)
 
         metrics["timestamp"] = parse_timestamp(match.group("timestamp"))
         metrics["seed"] = seed
@@ -213,14 +198,53 @@ def metric_label(metric: str) -> str:
     return metric.replace("_", " ")
 
 
-def plot_metric(df: pd.DataFrame, metric: str, output_path: Path, title: str) -> bool:
+def smoothed_output_path(output_path: Path) -> Path:
+    return output_path.with_name(f"{output_path.stem}_smoothed{output_path.suffix}")
+
+
+def add_rolling_smooth(
+    plot_df: pd.DataFrame,
+    metric: str,
+    smooth_window: int,
+    smooth_min_periods: int,
+) -> pd.DataFrame:
+    plot_df = plot_df.copy()
+    plot_df[f"{metric}_smoothed"] = (
+        plot_df[metric]
+        .rolling(window=smooth_window, min_periods=smooth_min_periods)
+        .mean()
+    )
+    return plot_df
+
+
+def apply_metric_ylim(ax, values: pd.Series) -> None:
+    values = values.dropna()
+    if not values.empty and values.min() >= 0 and values.max() <= 1:
+        ax.set_ylim(-0.02, 1.02)
+
+
+def plot_metric(
+    df: pd.DataFrame,
+    metric: str,
+    output_path: Path,
+    title: str,
+    smooth_window: int,
+    smooth_min_periods: int,
+) -> int:
     plot_df = df[["timestamp", metric]].dropna().sort_values("timestamp")
     if plot_df.empty:
-        return False
+        return 0
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    charts_written = 0
+
+    # ------------------------------------------------------------
+    # Original plot
+    # ------------------------------------------------------------
     fig, ax = plt.subplots(figsize=(12, 5.8))
     marker = None if len(plot_df) > 80 else "o"
+
     ax.plot(
         plot_df["timestamp"],
         plot_df[metric],
@@ -229,20 +253,70 @@ def plot_metric(df: pd.DataFrame, metric: str, output_path: Path, title: str) ->
         linewidth=1.8,
         color="#2563eb",
     )
+
     ax.set_title(title)
     ax.set_xlabel("Date")
     ax.set_ylabel(metric_label(metric))
     ax.grid(True, alpha=0.25)
 
-    values = plot_df[metric].dropna()
-    if not values.empty and values.min() >= 0 and values.max() <= 1:
-        ax.set_ylim(-0.02, 1.02)
+    apply_metric_ylim(ax, plot_df[metric])
 
     fig.autofmt_xdate()
     fig.tight_layout()
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
-    return True
+
+    charts_written += 1
+
+    # ------------------------------------------------------------
+    # Smoothed plot
+    # ------------------------------------------------------------
+    smooth_df = add_rolling_smooth(
+        plot_df=plot_df,
+        metric=metric,
+        smooth_window=smooth_window,
+        smooth_min_periods=smooth_min_periods,
+    )
+
+    smooth_metric = f"{metric}_smoothed"
+    smooth_plot_df = smooth_df[["timestamp", metric, smooth_metric]].dropna(subset=[smooth_metric])
+
+    if not smooth_plot_df.empty:
+        fig, ax = plt.subplots(figsize=(12, 5.8))
+
+        ax.plot(
+            smooth_plot_df["timestamp"],
+            smooth_plot_df[metric],
+            linewidth=1.0,
+            alpha=0.22,
+            color="#2563eb",
+            label="Raw",
+        )
+
+        ax.plot(
+            smooth_plot_df["timestamp"],
+            smooth_plot_df[smooth_metric],
+            linewidth=2.8,
+            color="#dc2626",
+            label=f"Rolling mean, window={smooth_window}",
+        )
+
+        ax.set_title(f"{title} - smoothed")
+        ax.set_xlabel("Date")
+        ax.set_ylabel(metric_label(metric))
+        ax.grid(True, alpha=0.25)
+        ax.legend()
+
+        apply_metric_ylim(ax, smooth_plot_df[[metric, smooth_metric]].stack())
+
+        fig.autofmt_xdate()
+        fig.tight_layout()
+        fig.savefig(smoothed_output_path(output_path), dpi=180)
+        plt.close(fig)
+
+        charts_written += 1
+
+    return charts_written
 
 
 def export_phase_charts(
@@ -251,6 +325,8 @@ def export_phase_charts(
     df_mean: pd.DataFrame,
     metric_columns: list[str],
     charts_dir: Path,
+    smooth_window: int,
+    smooth_min_periods: int,
 ) -> int:
     chart_count = 0
     mean_dir = charts_dir / phase / "mean"
@@ -260,24 +336,26 @@ def export_phase_charts(
         directory.mkdir(parents=True, exist_ok=True)
 
     for metric in metric_columns:
-        if plot_metric(
+        chart_count += plot_metric(
             df=df_mean,
             metric=metric,
             output_path=mean_dir / f"{safe_filename(metric)}.png",
             title=f"{phase.title()} mean - {metric_label(metric)}",
-        ):
-            chart_count += 1
+            smooth_window=smooth_window,
+            smooth_min_periods=smooth_min_periods,
+        )
 
     for hospital, hospital_df in df_by_hospital.groupby("hospital"):
         hospital_dir = by_hospital_dir / safe_filename(str(hospital))
         for metric in metric_columns:
-            if plot_metric(
+            chart_count += plot_metric(
                 df=hospital_df,
                 metric=metric,
                 output_path=hospital_dir / f"{safe_filename(metric)}.png",
                 title=f"{phase.title()} {hospital} - {metric_label(metric)}",
-            ):
-                chart_count += 1
+                smooth_window=smooth_window,
+                smooth_min_periods=smooth_min_periods,
+            )
 
     return chart_count
 
@@ -290,7 +368,6 @@ def export_csv(df: pd.DataFrame, output_path: Path) -> None:
 def run(args: argparse.Namespace) -> None:
     results_dir = Path(args.results_dir)
     charts_dir = Path(args.charts_dir)
-    patient_data_dir = Path(args.patient_data_dir)
 
     data_dir = charts_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -303,19 +380,18 @@ def run(args: argparse.Namespace) -> None:
     export_csv(training_df, data_dir / "train_last_global_round.csv")
     export_csv(train_by_hospital, data_dir / "train_by_hospital.csv")
     export_csv(train_mean, data_dir / "train_mean.csv")
+
     train_chart_count = export_phase_charts(
         phase="train",
         df_by_hospital=train_by_hospital,
         df_mean=train_mean,
         metric_columns=train_metrics,
         charts_dir=charts_dir,
+        smooth_window=args.smooth_window,
+        smooth_min_periods=args.smooth_min_periods,
     )
 
-    test_df = read_test_results(
-        results_dir=results_dir,
-        patient_data_dir=patient_data_dir,
-        number_of_hospitals=args.number_of_hospitals,
-    )
+    test_df = read_test_results(results_dir=results_dir)
     test_metrics = numeric_metric_columns(test_df)
     test_by_hospital = aggregate_by_hospital(test_df, test_metrics)
     test_mean = aggregate_mean(test_by_hospital, test_metrics)
@@ -323,20 +399,25 @@ def run(args: argparse.Namespace) -> None:
     export_csv(test_df, data_dir / "test_evaluated_rows.csv")
     export_csv(test_by_hospital, data_dir / "test_by_hospital.csv")
     export_csv(test_mean, data_dir / "test_mean.csv")
+
     test_chart_count = export_phase_charts(
         phase="test",
         df_by_hospital=test_by_hospital,
         df_mean=test_mean,
         metric_columns=test_metrics,
         charts_dir=charts_dir,
+        smooth_window=args.smooth_window,
+        smooth_min_periods=args.smooth_min_periods,
     )
 
     print(f"Training rows at last global round: {len(training_df)}")
     print(f"Training metrics plotted: {len(train_metrics)}")
-    print(f"Training charts written: {train_chart_count}")
+    print(f"Training charts written, including smoothed: {train_chart_count}")
     print(f"Test evaluated rows: {len(test_df)}")
     print(f"Test metrics plotted: {len(test_metrics)}")
-    print(f"Test charts written: {test_chart_count}")
+    print(f"Test charts written, including smoothed: {test_chart_count}")
+    print(f"Rolling smooth window: {args.smooth_window}")
+    print(f"Rolling smooth min periods: {args.smooth_min_periods}")
     print(f"Charts directory: {charts_dir.resolve()}")
 
 
@@ -344,10 +425,37 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Plot training and test metrics exported by the FL experiment."
     )
-    parser.add_argument("--results-dir", default="data/RetrainAfterTime")
-    parser.add_argument("--charts-dir", default="charts")
-    parser.add_argument("--patient-data-dir", default="T1DiabetesGranada/split-labeled")
-    parser.add_argument("--number-of-hospitals", type=int, default=10)
+    parser.add_argument(
+        "--results-dir",
+        default="data/ADWINErrorHierarchicalRetrainingPolicy-FedPers-NonIID",
+    )
+    parser.add_argument(
+        "--charts-dir",
+        default="charts/ADWINErrorHierarchicalRetrainingPolicy-FedPers-NonIID",
+    )
+    parser.add_argument(
+        "--smooth-window",
+        type=int,
+        default=30,
+        help="Rolling window size used for smoothed charts, in number of observations.",
+    )
+    parser.add_argument(
+        "--smooth-min-periods",
+        type=int,
+        default=5,
+        help="Minimum number of observations required to compute a smoothed value.",
+    )
+    parser.add_argument(
+        "--patient-data-dir",
+        default="T1DiabetesGranada/split-labeled",
+        help="Deprecated; test hospital mapping is read from results-dir.",
+    )
+    parser.add_argument(
+        "--number-of-hospitals",
+        type=int,
+        default=10,
+        help="Deprecated; test hospital mapping is read from results-dir.",
+    )
     return parser.parse_args()
 
 
