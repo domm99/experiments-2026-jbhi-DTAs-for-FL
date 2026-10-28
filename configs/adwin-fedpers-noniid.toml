@@ -1,0 +1,17 @@
+# Proposed approach: ADWIN-based hierarchical retraining, FedProx + local
+# personalization, label-skew (non-IID) partitioning across 10 hospitals.
+experiment = "ADWINErrorHierarchicalRetrainingPolicy"
+seeds = [0, 1, 2, 3, 4]
+iid = false
+only_local_learning = false
+personalization = true
+personalization_epochs = 3
+mu = 0.7
+fl_global_rounds = 8
+fl_local_epochs = 3
+
+adwin_delta = 0.1
+adwin_inference_interval_days = 1
+adwin_drifted_dt_fraction_threshold = 0.2   # p
+adwin_drifted_dta_fraction_threshold = 0.3  # q
+adwin_min_evaluated_dts = 5
