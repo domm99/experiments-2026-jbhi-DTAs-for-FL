@@ -1,3 +1,22 @@
+## [1.10.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.9.0...1.10.0) (2026-10-28)
+
+### Features
+
+* add personalization ([86e0921](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/86e09212e3320f2c1f2eeb05d42112f61472397c))
+* more plotters ([8ae8d00](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/8ae8d00a070aaa83a3a0e64b78c1b466407e1267))
+
+### Bug Fixes
+
+* fix inference_interval_days ([3a3be77](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/3a3be774cbc543f982ef8aa8eafeb5eca4821cd8))
+* fix personalization in simulator ([0d02fd7](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/0d02fd7a6efe7f70491160c72cf3cae8c1f45c99))
+
+### General maintenance
+
+* better plots ([11b7bb2](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/11b7bb2977db5c8d424add9d2d196cd5a3393708))
+* increase mu ([dfb67a6](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/dfb67a66616e209b0acfa2be9e1aeadd93e4a975))
+* **release:** update .env versions to 1.9.0 [skip ci] ([3a3732a](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/3a3732ab2c8fb2dcf85c5790ddec7cede88f941b))
+* update retrain after time param ([72cf9db](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/commit/72cf9db6bfb9966705539561098367a28c2128d5))
+
 ## [1.9.0](https://github.com/domm99/experiments-2026-jbhi-DTAs-for-FL/compare/1.8.0...1.9.0) (2026-06-27)
 
 ### Features
