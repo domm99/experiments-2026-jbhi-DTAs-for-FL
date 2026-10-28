@@ -193,18 +193,32 @@ class Simulator:
                 if dta.trainable_dt_count == 0:
                     print(f'========= Training skipped for DTA {dta.dta_id}: no trainable active DTs =========')
                     continue
-                dta.train(current_time, 0)
+                training_result = dta.train(
+                    current_time,
+                    'GR_0',
+                    start_from='deployed',
+                    epochs=self._config.fl_local_epochs,
+                    mu=self._config.mu,
+                )
+                if training_result is not None:
+                    dta.global_model = training_result.model
         else:
             completed_training = False
             for gr in range(self._config.fl_global_rounds):
                 print(f'Global round:{gr}')
-                ## 1. Local training
+                ## 1. Local training, always starting from the current global model
                 client_updates = []
                 for dta in self._dtas.values():
                     if dta.trainable_dt_count == 0:
                         print(f'========= Training skipped for DTA {dta.dta_id}: no trainable active DTs =========')
                         continue
-                    training_result = dta.train(current_time, gr)
+                    training_result = dta.train(
+                        current_time,
+                        f'GR_{gr}',
+                        start_from='global',
+                        epochs=self._config.fl_local_epochs,
+                        mu=self._config.mu,
+                    )
                     if training_result is not None:
                         client_updates.append((training_result.model, training_result.sample_count))
 
@@ -220,7 +234,7 @@ class Simulator:
 
                 ## 4. Notify new model to DTAs
                 for dta in self._dtas.values():
-                    dta.model = self._fl_server.model
+                    dta.global_model = self._fl_server.model
 
             if not completed_training:
                 print(f'========= Training at {current_time} produced no global model update =========')
@@ -231,7 +245,9 @@ class Simulator:
             #     if dta.trainable_dt_count == 0:
             #         print(f'========= Training skipped for DTA {dta.dta_id}: no trainable active DTs =========')
             #         continue
-            #     dta.train(current_time, 0)
+            #     training_result = dta.train(current_time, 'PERS', start_from='global', epochs=self._config.fl_local_epochs, mu=self._config.mu)
+            #     if training_result is not None:
+            #         dta.deployed_model = training_result.model
 
         ## 6. Notification of new model to HDTs
         for dta in self._dtas.values():

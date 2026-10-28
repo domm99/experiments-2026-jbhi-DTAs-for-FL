@@ -1,4 +1,3 @@
-import copy
 import torch
 import pandas as pd
 from dataclasses import dataclass
@@ -35,11 +34,14 @@ class DTATrainingResult:
     sample_count: int
 
 
+def _copy_state(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    return {key: value.detach().clone() for key, value in state.items()}
+
+
 class DTAggregate:
 
     def __init__(self, mid, config: LearningConfig, experiment: str, initial_model, seed: int):
         self._mid = mid
-        self._model = initial_model
         self._device = config.device
         self._config = config
         self._dts_data = {}
@@ -49,7 +51,12 @@ class DTAggregate:
         self._last_std = 1.0
         self._has_statistics = False
         self._experiment = experiment
-        self._mu = config.mu
+        # _global_model is the last model received from the FL server (or the
+        # local model when learning only locally); _deployed_model is the model
+        # deployed to the DTs of this DTA, which differs from the global one
+        # when personalization is enabled.
+        self._global_model = _copy_state(initial_model)
+        self._deployed_model = self._global_model
 
     def update_data_from_dts(self, current_time: pd.Timestamp) -> None:
         self._dts_data = {}
@@ -79,21 +86,30 @@ class DTAggregate:
 
     @property
     def model(self) -> dict[str, torch.Tensor]:
-        return self._model
+        """Model deployed to the DTs of this DTA."""
+        return self._deployed_model
 
     @property
     def dta_id(self) -> str:
         return self._mid
 
-    @model.setter
-    def model(self, value):
-        fresh = GlucoseClassifierLSTM(
-            hidden_size=self._config.hidden_size,
-            num_layers=self._config.layers,
-            dropout=self._config.dropout,
-        )
-        fresh.load_state_dict(value)
-        self._model = fresh.state_dict()
+    @property
+    def global_model(self) -> dict[str, torch.Tensor]:
+        return self._global_model
+
+    @global_model.setter
+    def global_model(self, value: dict[str, torch.Tensor]) -> None:
+        """Receives a new shared model; it is also the deployed one until personalized."""
+        self._global_model = _copy_state(value)
+        self._deployed_model = self._global_model
+
+    @property
+    def deployed_model(self) -> dict[str, torch.Tensor]:
+        return self._deployed_model
+
+    @deployed_model.setter
+    def deployed_model(self, value: dict[str, torch.Tensor]) -> None:
+        self._deployed_model = _copy_state(value)
 
     @property
     def statistics(self) -> tuple[float, float]:
@@ -108,28 +124,49 @@ class DTAggregate:
             print(f'Skipping model notification for DTA {self._mid}: no local normalization stats yet')
             return
         for dt in self._active_dts.values():
-            dt.model = (self._model, self._last_mean, self._last_std)
+            dt.model = (self._deployed_model, self._last_mean, self._last_std)
 
-    def train(self, current_time: pd.Timestamp, global_round: int) -> DTATrainingResult | None:
+    def train(
+        self,
+        current_time: pd.Timestamp,
+        log_label: str,
+        start_from: str,
+        epochs: int,
+        mu: float,
+    ) -> DTATrainingResult | None:
+        """
+        Trains a copy of the global ('global') or of the deployed ('deployed')
+        model on the local data set for the given number of epochs, with a
+        FedProx proximal term of coefficient mu towards the starting model.
+        The trained weights are returned; the caller decides whether they
+        become the global or the deployed model of the DTA.
+        """
+        if start_from == 'global':
+            start_state = self._global_model
+        elif start_from == 'deployed':
+            start_state = self._deployed_model
+        else:
+            raise ValueError(f'Unsupported start_from: {start_from}')
+
+        patients_series_raw = [series for series in self._dts_data.values() if series is not None]
+        if not patients_series_raw:
+            print('Skipping training: no DT has enough history for training windows yet')
+            return None
+
         model = GlucoseClassifierLSTM(
             hidden_size=self._config.hidden_size,
             num_layers=self._config.layers,
             dropout=self._config.dropout,
         ).to(self._config.device)
-        model.load_state_dict(self._model)
+        model.load_state_dict(start_state)
 
-        global_model = copy.deepcopy(model)
-        global_weights = [
+        anchor_weights = [
             param.detach().clone()
-            for param in global_model.parameters()
+            for param in model.parameters()
         ]
 
         optimizer = torch.optim.Adam(model.parameters(), lr=self._config.learning_rate)
         history: list[dict[str, float]] = []
-        patients_series_raw = [series for series in self._dts_data.values() if series is not None]
-        if not patients_series_raw:
-            print('Skipping training: no DT has enough history for training windows yet')
-            return None
         mean, std = compute_train_stats(patients_series_raw)
         normalized_series = normalize_series(patients_series_raw, mean, std)
         train_loader, val_loader = create_train_val_loaders(
@@ -138,6 +175,9 @@ class DTAggregate:
             stride = self._config.stride,
             batch_size = self._config.batch_size,
         )
+        if len(train_loader.dataset) == 0:
+            print(f'Skipping training for DTA {self._mid}: no observable training windows yet')
+            return None
         class_weights, class_counts = compute_class_weights(
             patient_series=normalized_series,
             sequence_length=self._config.sequence_length,
@@ -159,7 +199,7 @@ class DTAggregate:
             )
         )
 
-        for epoch in range(1, self._config.fl_local_epochs + 1):
+        for epoch in range(1, epochs + 1):
             model.train()
             train_loss_sum = 0.0
             train_loss_normalization = 0.0
@@ -171,7 +211,8 @@ class DTAggregate:
                 optimizer.zero_grad()
                 logits = model(x)
                 loss, loss_sum, loss_normalization = cross_entropy_batch(logits, y, loss_weights)
-                loss = loss + self.proximal_term(model, global_weights)
+                if mu > 0:
+                    loss = loss + self.proximal_term(model, anchor_weights, mu)
                 loss.backward()
                 optimizer.step()
 
@@ -214,19 +255,15 @@ class DTAggregate:
             )
 
         metrics_df = pd.DataFrame(history)
-        metrics_df.to_csv(f'{self._config.data_export_path}/{self._experiment}/training_{current_time}-hospital_{self._mid}-GR_{global_round}-seed_{self._seed}.csv', index=False)
-        self._model = {
-            key: value.detach().clone()
-            for key, value in model.state_dict().items()
-        }
+        metrics_df.to_csv(f'{self._config.data_export_path}/{self._experiment}/training_{current_time}-hospital_{self._mid}-{log_label}-seed_{self._seed}.csv', index=False)
         self._last_mean = mean
         self._last_std = std
         self._has_statistics = True
-        return DTATrainingResult(model=self._model, sample_count=sample_count)
+        return DTATrainingResult(model=_copy_state(model.state_dict()), sample_count=sample_count)
 
-
-    def proximal_term(self, trained_model, server_model):
+    @staticmethod
+    def proximal_term(trained_model, anchor_weights, mu: float):
         prox_term = 0.0
         for p_i, param in enumerate(trained_model.parameters()):
-            prox_term += (self._mu / 2) * torch.norm((param - server_model[p_i])) ** 2
+            prox_term += (mu / 2) * torch.norm((param - anchor_weights[p_i])) ** 2
         return prox_term
