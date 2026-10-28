@@ -57,6 +57,9 @@ class DTAggregate:
         # when personalization is enabled.
         self._global_model = _copy_state(initial_model)
         self._deployed_model = self._global_model
+        # True once a trained model is available (received from the FL server or
+        # trained locally), i.e. something that can be deployed to the DTs.
+        self._has_model = False
 
     def update_data_from_dts(self, current_time: pd.Timestamp) -> None:
         self._dts_data = {}
@@ -102,6 +105,7 @@ class DTAggregate:
         """Receives a new shared model; it is also the deployed one until personalized."""
         self._global_model = _copy_state(value)
         self._deployed_model = self._global_model
+        self._has_model = True
 
     @property
     def deployed_model(self) -> dict[str, torch.Tensor]:
@@ -110,6 +114,11 @@ class DTAggregate:
     @deployed_model.setter
     def deployed_model(self, value: dict[str, torch.Tensor]) -> None:
         self._deployed_model = _copy_state(value)
+        self._has_model = True
+
+    @property
+    def has_model(self) -> bool:
+        return self._has_model
 
     @property
     def statistics(self) -> tuple[float, float]:
@@ -119,12 +128,49 @@ class DTAggregate:
     def has_statistics(self) -> bool:
         return self._has_statistics
 
-    def notify_new_model(self):
-        if not self._has_statistics:
-            print(f'Skipping model notification for DTA {self._mid}: no local normalization stats yet')
-            return
-        for dt in self._active_dts.values():
-            dt.model = (self._deployed_model, self._last_mean, self._last_std)
+    def _statistics_source_dts(self) -> dict[str, DT]:
+        return self._active_dts
+
+    def refresh_statistics(self, current_time: pd.Timestamp) -> bool:
+        """
+        Makes sure that local normalization statistics are available. A DTA that
+        did not take part in a training (e.g. no data at that time) computes them
+        from the data currently available from its DTs, so that it can still
+        deploy the shared model. Returns False if no DT has enough data yet.
+        """
+        if self._has_statistics:
+            return True
+        available_series = []
+        for dt in self._statistics_source_dts().values():
+            try:
+                series = dt.get_data(current_time)
+            except Exception as exc:
+                print(f'Skipping DT {dt} for normalization statistics: {exc}')
+                continue
+            if series is not None:
+                available_series.append(series)
+        if not available_series:
+            return False
+        self._last_mean, self._last_std = compute_train_stats(available_series)
+        self._has_statistics = True
+        return True
+
+    def deploy_to(self, dt: DT, current_time: pd.Timestamp) -> bool:
+        """Deploys the current model to a DT, if a model and statistics are available."""
+        if not self._has_model:
+            return False
+        if not self.refresh_statistics(current_time):
+            return False
+        dt.model = (self._deployed_model, self._last_mean, self._last_std, current_time)
+        return True
+
+    def notify_new_model(self, current_time: pd.Timestamp) -> None:
+        deployed = sum(self.deploy_to(dt, current_time) for dt in self._active_dts.values())
+        if deployed < len(self._active_dts):
+            print(
+                f'DTA {self._mid}: model deployed to {deployed}/{len(self._active_dts)} DTs, '
+                'the others will receive it as soon as local data is available'
+            )
 
     def train(
         self,

@@ -158,9 +158,7 @@ class Simulator:
         dta_id = self.__lookup_dta_from_patient_id(event.payload['patient_id'])
         dta = self._dtas[dta_id]
         dta.register_active_dt(local_dt, patient_id)
-        if dta.has_statistics:
-            mean, std = dta.statistics
-            local_dt.model = (dta.model, mean, std)
+        dta.deploy_to(local_dt, current_time)
 
     def __lookup_dta_from_patient_id(self, patient_id):
         for dta_id, dts in self._mapping_dtas_dts.items():
@@ -265,7 +263,7 @@ class Simulator:
 
         ## 6. Notification of new model to HDTs
         for dta in self._dtas.values():
-            dta.notify_new_model()
+            dta.notify_new_model(current_time)
 
         self._state.last_training_time = current_time
         self._state.last_inference_results = []
@@ -287,6 +285,13 @@ class Simulator:
         self._handled_inference_keys.add(inference_key)
         inference_results = []
         window_start_time = event.payload.get('window_start_time')
+        # Lazy deployment: DTs that could not receive the model yet (their DTA
+        # had no local data when the model was distributed) get it now; they are
+        # evaluated from the next inference on.
+        for dta in self._dtas.values():
+            for dt in dta.active_dts:
+                if dt.model is None:
+                    dta.deploy_to(dt, current_time)
         active_dts_from_dtas = [dta.active_dts for dta in self._dtas.values()]
         dts = [dt for active_dts in active_dts_from_dtas for dt in active_dts]
         for local_dt in dts:

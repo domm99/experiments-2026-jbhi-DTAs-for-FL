@@ -25,6 +25,10 @@ class DT:
         self._is_active = False
         self._dt_aggregate = None
         self._experiment = experiment
+        # Time at which the current model was deployed and time up to which the
+        # predictions of the deployed models have already been evaluated.
+        self._model_time = None
+        self._evaluated_until = None
         self._data = self.__upload_data(data_path, mid)
 
     def activate(self, current_time: pd.Timestamp):
@@ -39,8 +43,8 @@ class DT:
         return self._model
 
     @model.setter
-    def model(self, data: tuple[OrderedDict[str, torch.Tensor], float, float]):
-        model, mean, std = data
+    def model(self, data: tuple[OrderedDict[str, torch.Tensor], float, float, pd.Timestamp]):
+        model, mean, std, deployed_at = data
         fresh_model = GlucoseClassifierLSTM(
             hidden_size=self._config.hidden_size,
             num_layers=self._config.layers,
@@ -50,6 +54,11 @@ class DT:
         self._model = fresh_model
         self._last_mean = mean
         self._last_std = std
+        self._model_time = deployed_at
+
+    @property
+    def model_time(self) -> pd.Timestamp | None:
+        return self._model_time
 
     @property
     def dt_aggregate(self):
@@ -111,6 +120,7 @@ class DT:
             last_training_time,
             window_start_time=window_start_time,
         )
+        self._evaluated_until = current_time
         if loader is None:
             metrics = {
                 'status': 'skipped_short_test_window',
@@ -148,15 +158,23 @@ class DT:
         window_start_time: pd.Timestamp | None = None,
     ):
         if window_start_time is None:
+            # Cumulative evaluation of everything observed since the last training.
             filtered_df = self.__filter_data_by_time(current_time, last_training_time)
-            num_points = len(filtered_df)
+            target_start_time = self._model_time
         else:
+            # Incremental evaluation: only predictions not evaluated yet, and only
+            # those made by the currently deployed model. Tracked per DT so that a
+            # DT which received its model later (or whose DTA did not retrain)
+            # neither skips nor re-evaluates any period.
             filtered_df = self.__filter_data_by_time(current_time)
-            window_df = filtered_df[
-                (filtered_df['timestamp'] > window_start_time) &
-                (filtered_df['timestamp'] <= current_time)
-            ]
-            num_points = len(window_df)
+            # window_start_time is only a fallback: in global retraining it equals
+            # the deployment time anyway.
+            candidates = [time for time in (self._evaluated_until, self._model_time) if time is not None]
+            target_start_time = max(candidates) if candidates else window_start_time
+        window_df = filtered_df[filtered_df['timestamp'] <= current_time]
+        if target_start_time is not None:
+            window_df = window_df[window_df['timestamp'] > target_start_time]
+        num_points = len(window_df)
 
         series = load_test_patient_series(
             patient_id=self._mid,
@@ -173,7 +191,7 @@ class DT:
             self._config.sequence_length,
             self._config.stride,
             self._config.batch_size,
-            target_start_time=window_start_time,
+            target_start_time=target_start_time,
             target_start_inclusive=False,
             target_end_time=current_time,
         )
