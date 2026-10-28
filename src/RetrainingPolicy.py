@@ -14,6 +14,10 @@ class ADWINErrorUpdate:
     width: Any = None
     estimation: Any = None
     timestep: Any = None
+    # Change detected by ADWIN regardless of its direction, and its direction
+    # ('increase' / 'decrease' of the error rate, None if no change).
+    raw_drift_detected: bool = False
+    direction: str | None = None
 
 @dataclass
 class ADWINErrorDecentralizedDecision:
@@ -38,10 +42,15 @@ class ADWINErrorRetrainingPolicy(RetrainingPolicy):
         self,
         delta: float = 0.01,
         reset_after_retrain: bool = True,
+        one_sided: bool = True,
     ) -> None:
         self.delta = delta
         self.reset_after_retrain = reset_after_retrain
+        # ADWIN is two-sided: it also fires when the error rate decreases. With
+        # one_sided only increases of the error (i.e. degradation) count as drift.
+        self.one_sided = one_sided
         self.total_drifts = 0
+        self.ignored_improvements = 0
         self.detector = self._new_detector()
 
     def _new_detector(self):
@@ -51,16 +60,31 @@ class ADWINErrorRetrainingPolicy(RetrainingPolicy):
 
     def update(self, y_true, y_pred, timestep=None) -> ADWINErrorUpdate:
         error = int(y_true != y_pred)
+        estimation_before = self.estimation
         # ADWIN detects statistically significant changes in model errors,
         # not drift directly on glucose features.
         update_result = self.detector.update(error)
-        drift_detected = self._read_drift_flag(update_result)
-        if drift_detected is None:
-            drift_detected = self._read_drift_flag(self.detector)
-        drift_detected = bool(drift_detected)
+        raw_drift_detected = self._read_drift_flag(update_result)
+        if raw_drift_detected is None:
+            raw_drift_detected = self._read_drift_flag(self.detector)
+        raw_drift_detected = bool(raw_drift_detected)
+
+        direction = None
+        if raw_drift_detected:
+            # After a detection ADWIN drops the oldest sub-window, so its estimate
+            # moves towards the recent error rate.
+            estimation_after = self.estimation
+            direction = (
+                'increase'
+                if estimation_before is None or estimation_after is None or estimation_after > estimation_before
+                else 'decrease'
+            )
+        drift_detected = raw_drift_detected and (not self.one_sided or direction == 'increase')
 
         if drift_detected:
             self.total_drifts += 1
+        elif raw_drift_detected:
+            self.ignored_improvements += 1
 
         return ADWINErrorUpdate(
             retrain=drift_detected,
@@ -71,6 +95,8 @@ class ADWINErrorRetrainingPolicy(RetrainingPolicy):
             width=self._detector_metric(('width', 'window_size', 'n_samples')),
             estimation=self._detector_metric(('estimation', 'mean', 'mean_', 'total_mean')),
             timestep=timestep,
+            raw_drift_detected=raw_drift_detected,
+            direction=direction,
         )
 
     def reset(self) -> None:
@@ -140,11 +166,13 @@ class ADWINErrorDecentralizedRetrainingPolicy(RetrainingPolicy):
         drifted_dt_fraction_threshold: float = 0.3,
         min_comparable_dts: int = 1,
         reset_after_retrain: bool = True,
+        one_sided: bool = True,
     ) -> None:
         self.delta = delta
         self.drifted_dt_fraction_threshold = drifted_dt_fraction_threshold
         self.min_comparable_dts = min_comparable_dts
         self.reset_after_retrain = reset_after_retrain
+        self.one_sided = one_sided
         self.total_dt_drifts = 0
         self._dt_policies: dict[str, ADWINErrorRetrainingPolicy] = {}
 
@@ -192,4 +220,5 @@ class ADWINErrorDecentralizedRetrainingPolicy(RetrainingPolicy):
         return ADWINErrorRetrainingPolicy(
             delta=self.delta,
             reset_after_retrain=False,
+            one_sided=self.one_sided,
         )

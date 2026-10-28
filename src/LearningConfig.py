@@ -87,6 +87,8 @@ class LearningConfig:
     adwin_drifted_dta_fraction_threshold: float = 0.1
     adwin_min_evaluated_dtas: int = 1
     adwin_reset_after_retrain: bool = True
+    # Only increases of the error rate count as drift (ADWIN is two-sided)
+    adwin_one_sided: bool = True
 
     ## FL
     fl_global_rounds: int = 8

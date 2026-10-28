@@ -341,10 +341,12 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
         drifted_dta_fraction_threshold: float = 0.3,
         min_comparable_dtas: int = 1,
         reset_after_retrain: bool = True,
+        one_sided: bool = True,
         train_priority: int = 1,
         inference_priority: int = 2,
     ) -> None:
         super().__init__(simulator)
+        self._one_sided = one_sided
         self._bootstrap_months = bootstrap_months
         self._inference_interval_days = inference_interval_days
         self._retraining_delay_days = retraining_delay_days
@@ -443,6 +445,15 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
                 error_count += update.error
                 self._collect_number(widths, update.width)
                 self._collect_number(estimations, update.estimation)
+                if update.raw_drift_detected and not update.drift_detected:
+                    # Error rate decreased: not a degradation, only logged.
+                    self._export_dt_drift_event(
+                        detection_time=detection_time,
+                        last_training_time=last_training_time,
+                        dta_id=dta_id,
+                        dt_id=dt_id,
+                        update=update,
+                    )
                 if not update.drift_detected:
                     continue
 
@@ -581,6 +592,7 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
                 drifted_dt_fraction_threshold=self._drifted_dt_fraction_threshold,
                 min_comparable_dts=self._min_comparable_dts,
                 reset_after_retrain=self._reset_after_retrain,
+                one_sided=self._one_sided,
             )
         return self._dta_policies[dta_id]
 
@@ -666,6 +678,7 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             'adwin_max_width': max_width,
             'adwin_mean_estimation': mean_estimation,
             'delta': self._delta,
+            'one_sided': self._one_sided,
             'reset_after_retrain': self._reset_after_retrain,
             'total_dt_drifts': self._total_dt_drifts,
             'total_dta_signals': self._total_dta_signals,
@@ -695,6 +708,8 @@ class ADWINErrorDecentralizedRetrainingMonitor(Monitor):
             'delta': update.delta,
             'adwin_width': update.width,
             'adwin_estimation': update.estimation,
+            'direction': update.direction,
+            'accepted_as_degradation': update.drift_detected,
             'dt_total_drifts': update.total_drifts,
             'total_dt_drifts': self._total_dt_drifts,
             'simulation_end_time': self._simulator.ending_time,
