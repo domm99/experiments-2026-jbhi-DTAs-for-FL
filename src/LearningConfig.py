@@ -45,16 +45,20 @@ class LearningConfig:
 
     ## Model and local training
     layers: int = 1
-    epochs: int = 4
     stride: int = 12
     dropout: float = 0.0
     hidden_size: int = 64
     batch_size: int = 256
-    val_ratio: float = 0.2
-    train_ratio: float = 0.8
+    # Fraction of each patient's history used for training. 1.0 trains on all the
+    # observable data; < 1.0 keeps the most recent rows as a (logged only)
+    # temporal validation split.
+    train_ratio: float = 1.0
     sequence_length: int = 12
     learning_rate: float = 1e-3
     label_column: str = 'target_any_within_t'
+    # Number of future rows the label looks at (4 x 15 min = 60 min): a label is
+    # used for training/evaluation only once those rows have been observed.
+    label_horizon_steps: int = 4
 
     ## Time-based policy
     time_based_interval_months: int = 3
@@ -111,6 +115,10 @@ def validate_config(config: LearningConfig) -> None:
         raise ValueError('number_of_hospitals must be greater than zero')
     if config.mu < 0:
         raise ValueError('mu must be non-negative')
+    if not 0 < config.train_ratio <= 1:
+        raise ValueError('train_ratio must be in (0, 1]')
+    if config.label_horizon_steps < 0:
+        raise ValueError('label_horizon_steps must be non-negative')
 
 
 def load_config(path: str | None = None, overrides: list[str] | None = None) -> LearningConfig:

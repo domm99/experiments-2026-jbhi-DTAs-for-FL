@@ -18,6 +18,17 @@ from utils import (
 )
 
 
+_NAN_VAL_METRICS = {
+    'loss': float('nan'),
+    'accuracy': float('nan'),
+    'precision': float('nan'),
+    'recall': float('nan'),
+    'f1_score': float('nan'),
+    **{f'precision_{name}': float('nan') for name in CLASS_NAMES},
+    **{f'recall_{name}': float('nan') for name in CLASS_NAMES},
+}
+
+
 @dataclass
 class DTATrainingResult:
     model: dict[str, torch.Tensor]
@@ -169,7 +180,10 @@ class DTAggregate:
                 predictions = logits.argmax(dim=1)
                 update_confusion_matrix(train_confusion_matrix, y, predictions)
 
-            val_metrics = evaluate(model, val_loader, self._device, class_weights=class_weights)
+            if len(val_loader.dataset) > 0:
+                val_metrics = evaluate(model, val_loader, self._device, class_weights=class_weights)
+            else:
+                val_metrics = _NAN_VAL_METRICS
             train_metrics = classification_metrics_from_confusion_matrix(train_confusion_matrix)
 
             epoch_log = {

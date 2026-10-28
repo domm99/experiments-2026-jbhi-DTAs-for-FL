@@ -20,6 +20,10 @@ class PatientSeries:
     labels: torch.Tensor
     train_end: int
     val_end: int
+    # Time at which the label of each row becomes observable (the label looks
+    # label_horizon_steps rows ahead). NaT when it is not observable yet.
+    # None means "observable at the row timestamp".
+    label_observed_at: list[pd.Timestamp] | None = None
 
 
 class GlucoseWindowDataset(Dataset):
@@ -42,6 +46,11 @@ class GlucoseWindowDataset(Dataset):
         self.samples: list[tuple[int, int]] = []
 
         for patient_index, series in enumerate(self.patient_series):
+            observed_at = (
+                series.label_observed_at
+                if series.label_observed_at is not None
+                else series.timestamps
+            )
             if split == "train":
                 start_input_end = sequence_length
                 end_input_end = series.train_end + 1
@@ -61,7 +70,11 @@ class GlucoseWindowDataset(Dataset):
 
             for input_end_idx in range(start_input_end, end_input_end, stride):
                 target_idx = input_end_idx - 1
-                target_timestamp = series.timestamps[target_idx]
+                # Targets are selected by the time their label becomes known, so
+                # that neither training nor evaluation uses labels from the future.
+                target_timestamp = observed_at[target_idx]
+                if pd.isna(target_timestamp):
+                    continue
                 if target_start_time is not None:
                     if target_start_inclusive and target_timestamp < target_start_time:
                         continue
@@ -130,6 +143,7 @@ def decode_label_indices(indices: torch.Tensor) -> list[str]:
 def _prepare_patient_dataframe(
     patient_dataframe: pd.DataFrame,
     label_column: str = DEFAULT_LABEL_COLUMN,
+    label_horizon_steps: int = 0,
 ) -> pd.DataFrame:
     df = patient_dataframe.copy()
     if "timestamp" not in df.columns:
@@ -138,7 +152,12 @@ def _prepare_patient_dataframe(
             format="%Y-%m-%d %H:%M:%S",
             errors="coerce",
         )
-    df = df.dropna(subset=["timestamp", "Measurement", label_column]).sort_values("timestamp")
+    df = df.dropna(subset=["timestamp", "Measurement"]).sort_values("timestamp")
+    # The label of a row is computed from the next label_horizon_steps rows, so
+    # it only becomes observable once those rows have been acquired. Computed
+    # before dropping missing labels so that row offsets are preserved.
+    df["label_observed_at"] = df["timestamp"].shift(-label_horizon_steps) if label_horizon_steps > 0 else df["timestamp"]
+    df = df.dropna(subset=[label_column])
     return df
 
 
@@ -148,8 +167,13 @@ def load_patient_series(
     sequence_length: int,
     train_ratio: float,
     label_column: str = DEFAULT_LABEL_COLUMN,
+    label_horizon_steps: int = 0,
 ) -> PatientSeries | None:
-    df = _prepare_patient_dataframe(patient_dataframe, label_column=label_column)
+    df = _prepare_patient_dataframe(
+        patient_dataframe,
+        label_column=label_column,
+        label_horizon_steps=label_horizon_steps,
+    )
 
     min_required = sequence_length + 2
     if len(df) < min_required:
@@ -161,10 +185,14 @@ def load_patient_series(
     )
     labels = encode_labels(df[label_column])
     n_total = len(values)
-    train_end = max(sequence_length + 1, int(n_total * train_ratio))
-
-    if train_end >= n_total:
-        raise Exception(f"Training split is too large for {patient_id}")
+    if train_ratio >= 1.0:
+        # Train on all the observable data, no validation split.
+        train_end = n_total
+    else:
+        # Optional temporal validation split (most recent rows), only logged.
+        train_end = max(sequence_length + 1, int(n_total * train_ratio))
+        if train_end >= n_total:
+            raise Exception(f"Training split is too large for {patient_id}")
 
     return PatientSeries(
         patient_id=str(df["Patient_ID"].iloc[0]),
@@ -173,6 +201,7 @@ def load_patient_series(
         labels=labels,
         train_end=train_end,
         val_end=n_total,
+        label_observed_at=df["label_observed_at"].tolist(),
     )
 
 
@@ -181,8 +210,13 @@ def load_test_patient_series(
     patient_dataframe: pd.DataFrame,
     sequence_length: int,
     label_column: str = DEFAULT_LABEL_COLUMN,
+    label_horizon_steps: int = 0,
 ) -> PatientSeries | None:
-    df = _prepare_patient_dataframe(patient_dataframe, label_column=label_column)
+    df = _prepare_patient_dataframe(
+        patient_dataframe,
+        label_column=label_column,
+        label_horizon_steps=label_horizon_steps,
+    )
 
     min_required = sequence_length + 1
     if len(df) < min_required:
@@ -201,6 +235,7 @@ def load_test_patient_series(
         labels=labels,
         train_end=len(values),
         val_end=len(values),
+        label_observed_at=df["label_observed_at"].tolist(),
     )
 
 
@@ -230,6 +265,7 @@ def normalize_series(
                 labels=series.labels,
                 train_end=series.train_end,
                 val_end=series.val_end,
+                label_observed_at=series.label_observed_at,
             )
         )
     return normalized

@@ -75,6 +75,7 @@ class DT:
             sequence_length=self._config.sequence_length,
             train_ratio=self._config.train_ratio,
             label_column=self._config.label_column,
+            label_horizon_steps=self._config.label_horizon_steps,
         )
         return series
 
@@ -162,6 +163,7 @@ class DT:
             patient_dataframe=filtered_df,
             sequence_length=self._config.sequence_length,
             label_column=self._config.label_column,
+            label_horizon_steps=self._config.label_horizon_steps,
         )
         if series is None:
             return None, num_points
