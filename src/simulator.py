@@ -88,6 +88,7 @@ class Simulator:
         self._only_local_learning = only_local_learning
         self._output_dir = Path(config.data_export_path) / experiment
         self._handled_inference_keys: set[tuple[pd.Timestamp, pd.Timestamp]] = set()
+        self._retraining_event_count = 0
 
     def schedule_event(self, event: Event) -> bool:
         if event.time > self._ending_time:
@@ -186,6 +187,19 @@ class Simulator:
         for dta in self._dtas.values():
             dta.update_data_from_dts(current_time)
 
+        # Per-DTA record of the training work done in this event (for the cost
+        # analysis): epochs per phase and number of training windows.
+        work = {
+            dta.dta_id: {'federated_rounds': 0, 'federated_epochs': 0, 'personalization_epochs': 0, 'local_epochs': 0, 'sample_count': 0}
+            for dta in self._dtas.values()
+        }
+
+        def record(dta_id: str, phase: str, epochs: int, sample_count: int) -> None:
+            work[dta_id][f'{phase}_epochs'] += epochs
+            work[dta_id]['sample_count'] = max(work[dta_id]['sample_count'], sample_count)
+            if phase == 'federated':
+                work[dta_id]['federated_rounds'] += 1
+
         if self._only_local_learning:
             for dta in self._dtas.values():
                 if dta.trainable_dt_count == 0:
@@ -200,6 +214,7 @@ class Simulator:
                 )
                 if training_result is not None:
                     dta.global_model = training_result.model
+                    record(dta.dta_id, 'local', self._config.fl_local_epochs, training_result.sample_count)
         else:
             completed_training = False
             for gr in range(self._config.fl_global_rounds):
@@ -219,6 +234,7 @@ class Simulator:
                     )
                     if training_result is not None:
                         client_updates.append((training_result.model, training_result.sample_count))
+                        record(dta.dta_id, 'federated', self._config.fl_local_epochs, training_result.sample_count)
 
                 ## 2. Get local models from DTAs
                 if not client_updates:
@@ -236,6 +252,7 @@ class Simulator:
 
             if not completed_training:
                 print(f'========= Training at {current_time} produced no global model update =========')
+                self.__export_retraining_log(event, work, completed=False)
                 return
 
             ## 5. Local personalization: fine-tuning of the global model on the
@@ -260,6 +277,7 @@ class Simulator:
                     )
                     if training_result is not None:
                         dta.deployed_model = training_result.model
+                        record(dta.dta_id, 'personalization', self._config.personalization_epochs, training_result.sample_count)
 
         ## 6. Notification of new model to HDTs
         for dta in self._dtas.values():
@@ -267,6 +285,35 @@ class Simulator:
 
         self._state.last_training_time = current_time
         self._state.last_inference_results = []
+        self.__export_retraining_log(event, work, completed=True)
+
+    def __export_retraining_log(self, event: Event, work: dict[str, dict[str, int]], completed: bool) -> None:
+        """One row per DTA and retraining event, with the training work it did."""
+        self._retraining_event_count += 1
+        rows = []
+        for dta_id, dta_work in work.items():
+            total_epochs = dta_work['federated_epochs'] + dta_work['personalization_epochs'] + dta_work['local_epochs']
+            rows.append({
+                'retraining_index': self._retraining_event_count,
+                'time': event.time,
+                'reason': event.payload.get('reason'),
+                'policy': event.payload.get('policy'),
+                'mode': 'local' if self._only_local_learning else 'federated',
+                'completed': completed,
+                'dta_id': dta_id,
+                'trained': total_epochs > 0,
+                'dts_with_data': self._dtas[dta_id].trainable_dt_count,
+                'sample_count': dta_work['sample_count'],
+                'federated_rounds': dta_work['federated_rounds'],
+                'federated_epochs': dta_work['federated_epochs'],
+                'personalization_epochs': dta_work['personalization_epochs'],
+                'local_epochs': dta_work['local_epochs'],
+                'total_epochs': total_epochs,
+                # Number of training windows processed (sample_count x epochs)
+                'sample_epochs': dta_work['sample_count'] * total_epochs,
+            })
+        output_path = self._output_dir / f'retraining_log-seed_{self.seed}.csv'
+        pd.DataFrame(rows).to_csv(output_path, mode='a', header=not output_path.exists(), index=False)
 
     def __handle_inference(self, event: Event):
         current_time = event.time
