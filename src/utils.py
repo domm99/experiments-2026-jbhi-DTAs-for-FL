@@ -345,59 +345,85 @@ def update_confusion_matrix(
 
 
 def classification_metrics_from_confusion_matrix(confusion_matrix: torch.Tensor) -> dict[str, float]:
+    """
+    Accuracy and macro-averaged precision/recall/F1 from a confusion matrix
+    (rows = true class, columns = predicted class).
+
+    Macro averages only include the classes that occur in the true or in the
+    predicted labels: a class that is absent from both is not part of the
+    evaluation and does not count as zero. Per-class values that are undefined
+    (no support) are NaN. The raw confusion matrix is exported as cm_<true>_<pred>
+    counts so that metrics can also be recomputed on pooled matrices.
+    """
     counts = confusion_matrix.to(dtype=torch.float64)
     total = counts.sum()
+    cm_counts = {
+        f"cm_{true_name}_{pred_name}": int(confusion_matrix[true_index, pred_index].item())
+        for true_index, true_name in enumerate(CLASS_NAMES)
+        for pred_index, pred_name in enumerate(CLASS_NAMES)
+    }
     if total.item() == 0:
         metrics = {
             "prediction_count": 0,
             "prediction_correct_count": 0,
             "prediction_error_count": 0,
-            "accuracy": 0.0,
-            "precision": 0.0,
-            "recall": 0.0,
-            "f1_score": 0.0,
+            "accuracy": float("nan"),
+            "precision": float("nan"),
+            "recall": float("nan"),
+            "f1_score": float("nan"),
         }
         for class_name in CLASS_NAMES:
-            metrics[f"precision_{class_name}"] = 0.0
-            metrics[f"recall_{class_name}"] = 0.0
+            metrics[f"precision_{class_name}"] = float("nan")
+            metrics[f"recall_{class_name}"] = float("nan")
+        metrics.update(cm_counts)
         return metrics
 
     true_positives = counts.diag()
     actual_support = counts.sum(dim=1)
     predicted_support = counts.sum(dim=0)
+    present_classes = (actual_support > 0) | (predicted_support > 0)
 
+    # Same convention as scikit-learn with zero_division=0 for the classes that
+    # are present: a class that is never predicted has precision 0, a class that
+    # is predicted but never occurs has recall 0.
     precision_per_class = torch.where(
         predicted_support > 0,
-        true_positives / predicted_support,
+        true_positives / predicted_support.clamp_min(1),
         torch.zeros_like(true_positives),
     )
     recall_per_class = torch.where(
         actual_support > 0,
-        true_positives / actual_support,
+        true_positives / actual_support.clamp_min(1),
         torch.zeros_like(true_positives),
     )
     f1_denominator = precision_per_class + recall_per_class
     f1_per_class = torch.where(
         f1_denominator > 0,
-        2.0 * precision_per_class * recall_per_class / f1_denominator,
+        2.0 * precision_per_class * recall_per_class / f1_denominator.clamp_min(1e-12),
         torch.zeros_like(f1_denominator),
     )
     correct_predictions = true_positives.sum().item()
     prediction_count = total.item()
 
-    # Macro averages keep each class equally important despite imbalance.
     metrics = {
         "prediction_count": int(prediction_count),
         "prediction_correct_count": int(correct_predictions),
         "prediction_error_count": int(prediction_count - correct_predictions),
         "accuracy": float(correct_predictions / prediction_count),
-        "precision": float(precision_per_class.mean().item()),
-        "recall": float(recall_per_class.mean().item()),
-        "f1_score": float(f1_per_class.mean().item()),
+        "precision": float(precision_per_class[present_classes].mean().item()),
+        "recall": float(recall_per_class[present_classes].mean().item()),
+        "f1_score": float(f1_per_class[present_classes].mean().item()),
     }
     for class_index, class_name in enumerate(CLASS_NAMES):
-        metrics[f"precision_{class_name}"] = float(precision_per_class[class_index].item())
-        metrics[f"recall_{class_name}"] = float(recall_per_class[class_index].item())
+        metrics[f"precision_{class_name}"] = (
+            float(precision_per_class[class_index].item())
+            if predicted_support[class_index] > 0 else float("nan")
+        )
+        metrics[f"recall_{class_name}"] = (
+            float(recall_per_class[class_index].item())
+            if actual_support[class_index] > 0 else float("nan")
+        )
+    metrics.update(cm_counts)
     return metrics
 
 
